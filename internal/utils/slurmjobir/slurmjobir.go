@@ -59,6 +59,17 @@ type translator struct {
 	ctx context.Context
 }
 
+// IsOneJobPerGroupWorkload returns true when the workload uses one Slurm placeholder job per group
+// (PodGroup, JobSet, LWS). When false, the workload uses one job per pod (standalone Pod or Job).
+func IsOneJobPerGroupWorkload(ir *SlurmJobIR) bool {
+	switch ir.RootPOM.TypeMeta {
+	case podGroup_v1alpha1, jobSet_v1alpha2, lws_v1:
+		return true
+	default:
+		return false
+	}
+}
+
 func PreFilter(c client.Client, ctx context.Context, pod *corev1.Pod, slurmJobIR *SlurmJobIR) *fwk.Status {
 	t := translator{Reader: c, ctx: ctx}
 	switch slurmJobIR.RootPOM.TypeMeta {
@@ -112,6 +123,35 @@ func TranslateToSlurmJobIR(c client.Client, ctx context.Context, pod *corev1.Pod
 	parseGPUDevicePlugin(slurmJobIR)
 	err = parseAnnotations(slurmJobIR, rootPOM.Annotations)
 	return slurmJobIR, err
+}
+
+// BuildSinglePodIR builds a SlurmJobIR for a single pod (one job per pod). It copies RootPOM and
+// annotation-derived JobInfo from the group IR, then derives CpuPerTask, MemPerNode, and Gres from
+// the given pod only, and sets MinNodes=1, MaxNodes=1, TasksPerNode=1.
+func BuildSinglePodIR(ir *SlurmJobIR, pod *corev1.Pod) *SlurmJobIR {
+	single := &SlurmJobIR{
+		RootPOM: ir.RootPOM,
+		Pods:    corev1.PodList{Items: []corev1.Pod{*pod}},
+		JobInfo: SlurmJobIRJobInfo{
+			Account:      ir.JobInfo.Account,
+			Constraints:  ir.JobInfo.Constraints,
+			GroupId:      ir.JobInfo.GroupId,
+			JobName:      ir.JobInfo.JobName,
+			Licenses:     ir.JobInfo.Licenses,
+			Partition:    ir.JobInfo.Partition,
+			QOS:          ir.JobInfo.QOS,
+			Reservation:  ir.JobInfo.Reservation,
+			TimeLimit:    ir.JobInfo.TimeLimit,
+			UserId:       ir.JobInfo.UserId,
+			Wckey:        ir.JobInfo.Wckey,
+			MinNodes:     ptr.To(int32(1)),
+			MaxNodes:     ptr.To(int32(1)),
+			TasksPerNode: ptr.To(int32(1)),
+		},
+	}
+	parsePodsCpuAndMemory(single)
+	parseGPUDevicePlugin(single)
+	return single
 }
 
 /* Set CPU and Memory for the placeholder job based on the maximum Pod CPU and Memory (including overhead) */

@@ -76,7 +76,7 @@ Slurm is a full featured HPC workload manager. To highlight a few features:
 
 ## Limitations
 
-- Exclusive, whole node allocations are made for each pod.
+- To allow multiple pods per multi-GPU node, the Slurm partition used by slurm-bridge must be configured for node sharing (see [Slurm configuration](docs/scheduler.md#slurm-configuration) in the Scheduler documentation).
 
 ## Installation
 
