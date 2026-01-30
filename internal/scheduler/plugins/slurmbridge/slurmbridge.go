@@ -254,7 +254,7 @@ func (sb *SlurmBridge) PreFilter(ctx context.Context, state fwk.CycleState, pod 
 		if err != nil {
 			return nil, fwk.NewStatus(fwk.Error, err.Error())
 		}
-		err = sb.annotatePodsWithNodes(ctx, placeholderJob.JobId, kubeNodes, &s.slurmJobIR.Pods)
+		err = sb.annotatePodsWithNodes(ctx, placeholderJob.JobId, slices.Clone(kubeNodes), &s.slurmJobIR.Pods)
 		if err != nil {
 			return nil, fwk.NewStatus(fwk.Error, err.Error())
 		}
@@ -458,7 +458,7 @@ func (sb *SlurmBridge) annotatePodsWithNodes(ctx context.Context, jobid int32, k
 	})
 	nodeIndex := 0
 	for _, idx := range indices {
-		p := &pods.Items[idx]
+		p := pods.Items[idx]
 		// If this pod doesn't have a JobId that matches, it should be skipped as
 		// it didn't exist when the placeholder job was created
 		podJobID := slurmjobir.ParseSlurmJobId(p.Labels[wellknown.LabelPlaceholderJobId])
@@ -477,7 +477,7 @@ func (sb *SlurmBridge) annotatePodsWithNodes(ctx context.Context, jobid int32, k
 		nodeIndex++
 		toUpdate := p.DeepCopy()
 		toUpdate.Annotations[wellknown.AnnotationPlaceholderNode] = node
-		if err := sb.Patch(ctx, toUpdate, client.StrategicMergeFrom(p)); err != nil {
+		if err := sb.Patch(ctx, toUpdate, client.StrategicMergeFrom(&p)); err != nil {
 			logger.Error(err, "failed to update pod with slurm job id")
 			return ErrorPodUpdateFailed
 		}
@@ -594,7 +594,6 @@ func (sb *SlurmBridge) validatePodToJob(ctx context.Context, pod *corev1.Pod) er
 			toUpdate.Labels[wellknown.LabelPlaceholderJobId] = strconv.Itoa(int(val.JobId))
 		}
 		// If the pod has a Node set, validate it against podToJob
-
 		nodes, _ := hostlist.Expand(val.Nodes)
 		if pod.Annotations[wellknown.AnnotationPlaceholderNode] != "" &&
 			!slices.Contains(nodes, pod.Annotations[wellknown.AnnotationPlaceholderNode]) {
