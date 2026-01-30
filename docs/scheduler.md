@@ -39,22 +39,7 @@ correctly.
 
 ### Slurm configuration
 
-To allow multiple pods to share a multi-GPU node (e.g. one pod per GPU on an
-8-GPU node), the following Slurm configuration is required:
-
-1. **Partition**: The partition used by slurm-bridge must allow multiple jobs (or
-   tasks) per node. In `slurm.conf`, set **`OverSubscribe=YES`** or
-   **`OverSubscribe=FORCE`** on the partition. With `OverSubscribe=YES`, jobs
-   that request sharing (see below) can be packed on the same node. See
-   [Slurm partition configuration](https://slurm.schedmd.com/slurm.conf.html).
-
-2. **Job-level**: Placeholder jobs are submitted with **Shared=User** so that
-   Slurm may schedule them on nodes that allow sharing. No additional Slurm
-   configuration is required beyond the partition setting above.
-
-3. **GRES**: Slurm tracks GRES per allocation; each placeholder job requests
-   that pod's GPU count (e.g. 1 GPU). No change to existing GRES configuration
-   is required.
+To allow multiple pods to be scheduled on a single node, the `OverSubscribe` configuration must be set to `YES` or `FORCE` on the partition in slurm.conf.
 
 For more detail on resource sharing in Slurm, see
 [cons_tres resource sharing](https://slurm.schedmd.com/cons_tres_share.html).

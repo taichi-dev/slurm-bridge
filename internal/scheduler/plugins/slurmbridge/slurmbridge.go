@@ -251,7 +251,11 @@ func (sb *SlurmBridge) PreFilter(ctx context.Context, state fwk.CycleState, pod 
 		// The placeholder job is running. Assign nodes to pods in nodelist order
 		// so pod-to-node mapping matches Slurm task layout (important when multiple
 		// pods share a node via Shared=User).
-		slurmNodes, _ := hostlist.Expand(placeholderJob.Nodes)
+		slurmNodes, err := hostlist.Expand(placeholderJob.Nodes)
+		if err != nil {
+			logger.Error(err, "failed to expand Slurm nodelist", "nodelist", placeholderJob.Nodes)
+			return nil, fwk.NewStatus(fwk.Error, err.Error())
+		}
 		kubeNodesOrdered, err := sb.slurmToKubeNodesOrdered(ctx, slurmNodes)
 		if err != nil {
 			return nil, fwk.NewStatus(fwk.Error, err.Error())
@@ -442,10 +446,25 @@ func (sb *SlurmBridge) labelPodsWithJobId(ctx context.Context, jobid int32, slur
 
 // annotatePodsWithNodes assigns nodes to pods in order so pod-to-node mapping
 // matches Slurm task layout (e.g. when Shared=User and nodelist has repeated nodes).
+// Pods are processed in deterministic order (namespace, then name) so that the
+// i-th node in the Slurm nodelist is assigned to the i-th pod in that order.
 func (sb *SlurmBridge) annotatePodsWithNodes(ctx context.Context, jobid int32, kubeNodesOrdered []string, pods *corev1.PodList) error {
 	logger := klog.FromContext(ctx)
+	// Build sorted indices so we iterate in deterministic order without mutating the caller's slice.
+	indices := make([]int, len(pods.Items))
+	for i := range indices {
+		indices[i] = i
+	}
+	slices.SortFunc(indices, func(i, j int) int {
+		a, b := pods.Items[i], pods.Items[j]
+		if a.Namespace != b.Namespace {
+			return strings.Compare(a.Namespace, b.Namespace)
+		}
+		return strings.Compare(a.Name, b.Name)
+	})
 	nodeIndex := 0
-	for _, p := range pods.Items {
+	for _, idx := range indices {
+		p := &pods.Items[idx]
 		// If this pod doesn't have a JobId that matches, it should be skipped as
 		// it didn't exist when the placeholder job was created
 		podJobID := slurmjobir.ParseSlurmJobId(p.Labels[wellknown.LabelPlaceholderJobId])
@@ -464,7 +483,7 @@ func (sb *SlurmBridge) annotatePodsWithNodes(ctx context.Context, jobid int32, k
 		nodeIndex++
 		toUpdate := p.DeepCopy()
 		toUpdate.Annotations[wellknown.AnnotationPlaceholderNode] = node
-		if err := sb.Patch(ctx, toUpdate, client.StrategicMergeFrom(&p)); err != nil {
+		if err := sb.Patch(ctx, toUpdate, client.StrategicMergeFrom(p)); err != nil {
 			logger.Error(err, "failed to update pod with slurm job id")
 			return ErrorPodUpdateFailed
 		}
@@ -581,13 +600,17 @@ func (sb *SlurmBridge) validatePodToJob(ctx context.Context, pod *corev1.Pod) er
 			toUpdate.Labels[wellknown.LabelPlaceholderJobId] = strconv.Itoa(int(val.JobId))
 		}
 		// If the pod has a Node set, validate it against podToJob
-		nodes, _ := hostlist.Expand(val.Nodes)
-		if pod.Annotations[wellknown.AnnotationPlaceholderNode] != "" &&
-			!slices.Contains(nodes, pod.Annotations[wellknown.AnnotationPlaceholderNode]) {
-			logger.V(3).Info("Pod node annotation does not match Slurm nodes", "pod", klog.KObj(pod),
-				"node annotation", pod.Annotations[wellknown.AnnotationPlaceholderNode],
-				"slurm job", val)
-			toUpdate.Annotations[wellknown.AnnotationPlaceholderNode] = ""
+		nodes, err := hostlist.Expand(val.Nodes)
+		if err != nil {
+			logger.Error(err, "failed to expand Slurm nodelist for validation", "nodelist", val.Nodes)
+		} else {
+			if pod.Annotations[wellknown.AnnotationPlaceholderNode] != "" &&
+				!slices.Contains(nodes, pod.Annotations[wellknown.AnnotationPlaceholderNode]) {
+				logger.V(3).Info("Pod node annotation does not match Slurm nodes", "pod", klog.KObj(pod),
+					"node annotation", pod.Annotations[wellknown.AnnotationPlaceholderNode],
+					"slurm job", val)
+				toUpdate.Annotations[wellknown.AnnotationPlaceholderNode] = ""
+			}
 		}
 		if !reflect.DeepEqual(pod, toUpdate) {
 			if err := sb.Patch(ctx, toUpdate, client.StrategicMergeFrom(pod)); err != nil {

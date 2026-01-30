@@ -61,7 +61,11 @@ type translator struct {
 
 // IsOneJobPerGroupWorkload returns true when the workload uses one Slurm placeholder job per group
 // (PodGroup, JobSet, LWS). When false, the workload uses one job per pod (standalone Pod or Job).
+// Returns false if ir is nil.
 func IsOneJobPerGroupWorkload(ir *SlurmJobIR) bool {
+	if ir == nil {
+		return false
+	}
 	switch ir.RootPOM.TypeMeta {
 	case podGroup_v1alpha1, jobSet_v1alpha2, lws_v1:
 		return true
@@ -128,6 +132,7 @@ func TranslateToSlurmJobIR(c client.Client, ctx context.Context, pod *corev1.Pod
 // BuildSinglePodIR builds a SlurmJobIR for a single pod (one job per pod). It copies RootPOM and
 // annotation-derived JobInfo from the group IR, then derives CpuPerTask, MemPerNode, and Gres from
 // the given pod only, and sets MinNodes=1, MaxNodes=1, TasksPerNode=1.
+// The caller must set JobInfo.Nodes when using the result for submission (e.g. for RequiredNodes).
 func BuildSinglePodIR(ir *SlurmJobIR, pod *corev1.Pod) *SlurmJobIR {
 	single := &SlurmJobIR{
 		RootPOM: ir.RootPOM,

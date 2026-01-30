@@ -533,6 +533,11 @@ func TestIsOneJobPerGroupWorkload(t *testing.T) {
 			ir:   &SlurmJobIR{RootPOM: metav1.PartialObjectMetadata{TypeMeta: job_v1}},
 			want: false,
 		},
+		{
+			name: "nil IR returns false and does not panic",
+			ir:   nil,
+			want: false,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
