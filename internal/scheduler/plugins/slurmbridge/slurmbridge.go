@@ -594,17 +594,14 @@ func (sb *SlurmBridge) validatePodToJob(ctx context.Context, pod *corev1.Pod) er
 			toUpdate.Labels[wellknown.LabelPlaceholderJobId] = strconv.Itoa(int(val.JobId))
 		}
 		// If the pod has a Node set, validate it against podToJob
-		nodes, err := hostlist.Expand(val.Nodes)
-		if err != nil {
-			logger.Error(err, "failed to expand Slurm nodelist for validation", "nodelist", val.Nodes)
-		} else {
-			if pod.Annotations[wellknown.AnnotationPlaceholderNode] != "" &&
-				!slices.Contains(nodes, pod.Annotations[wellknown.AnnotationPlaceholderNode]) {
-				logger.V(3).Info("Pod node annotation does not match Slurm nodes", "pod", klog.KObj(pod),
-					"node annotation", pod.Annotations[wellknown.AnnotationPlaceholderNode],
-					"slurm job", val)
-				toUpdate.Annotations[wellknown.AnnotationPlaceholderNode] = ""
-			}
+
+		nodes, _ := hostlist.Expand(val.Nodes)
+		if pod.Annotations[wellknown.AnnotationPlaceholderNode] != "" &&
+			!slices.Contains(nodes, pod.Annotations[wellknown.AnnotationPlaceholderNode]) {
+			logger.V(3).Info("Pod node annotation does not match Slurm nodes", "pod", klog.KObj(pod),
+				"node annotation", pod.Annotations[wellknown.AnnotationPlaceholderNode],
+				"slurm job", val)
+			toUpdate.Annotations[wellknown.AnnotationPlaceholderNode] = ""
 		}
 		if !reflect.DeepEqual(pod, toUpdate) {
 			if err := sb.Patch(ctx, toUpdate, client.StrategicMergeFrom(pod)); err != nil {
