@@ -19,5 +19,6 @@ func (t *translator) fromPod(pod *corev1.Pod) (*SlurmJobIR, error) {
 	tasks := int32(1)
 	slurmJobIR.JobInfo.TasksPerNode = &tasks
 	slurmJobIR.JobInfo.MaxNodes = &tasks
+	slurmJobIR.JobInfo.MinNodes = &tasks
 	return slurmJobIR, nil
 }

@@ -25,7 +25,10 @@ func (t *translator) fromJob(pod *corev1.Pod, rootPOM *metav1.PartialObjectMetad
 
 	slurmJobIR := &SlurmJobIR{}
 	slurmJobIR.Pods.Items = append(slurmJobIR.Pods.Items, *pod)
-	slurmJobIR.JobInfo.MinNodes = ptr.To(int32(1))
+	tasks := int32(1)
+	slurmJobIR.JobInfo.MinNodes = ptr.To(tasks)
+	slurmJobIR.JobInfo.MaxNodes = ptr.To(tasks)
+	slurmJobIR.JobInfo.TasksPerNode = ptr.To(tasks)
 	if job.Spec.Template.Spec.Resources != nil {
 		slurmJobIR.JobInfo.CpuPerTask = ptr.To(int32(job.Spec.Template.Spec.Resources.Limits.Cpu().Value())) //nolint:gosec // disable G115
 		slurmJobIR.JobInfo.MemPerNode = ptr.To(int64(GetMemoryFromQuantity(job.Spec.Template.Spec.Resources.Limits.Memory())))

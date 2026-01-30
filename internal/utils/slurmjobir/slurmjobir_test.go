@@ -110,6 +110,10 @@ func TestTranslateToSlurmJobIR(t *testing.T) {
 				JobInfo: SlurmJobIRJobInfo{
 					Account: ptr.To("test1"),
 					GroupId: ptr.To("1000"),
+					MinNodes: func() *int32 {
+						minNodes := int32(1)
+						return &minNodes
+					}(),
 					MaxNodes: func() *int32 {
 						maxNodes := int32(1)
 						return &maxNodes
@@ -146,14 +150,9 @@ func TestTranslateToSlurmJobIR(t *testing.T) {
 					Items: []corev1.Pod{*podWithBadAnnotation.DeepCopy()},
 				},
 				JobInfo: SlurmJobIRJobInfo{
-					MaxNodes: func() *int32 {
-						maxNodes := int32(1)
-						return &maxNodes
-					}(),
-					TasksPerNode: func() *int32 {
-						tasksPerNode := int32(1)
-						return &tasksPerNode
-					}(),
+					MinNodes:     ptr.To(int32(1)),
+					MaxNodes:     ptr.To(int32(1)),
+					TasksPerNode: ptr.To(int32(1)),
 				},
 			},
 			wantErr: true,
@@ -497,6 +496,52 @@ func Test_parseAnnotations(t *testing.T) {
 			}
 			if !apiequality.Semantic.DeepEqual(&tt.wantRes, (tt.args.slurmJobIR)) {
 				t.Errorf("parseAnnotations() error = %v, want %v", tt.wantRes, *(tt.args.slurmJobIR))
+			}
+		})
+	}
+}
+
+func TestIsOneJobPerGroupWorkload(t *testing.T) {
+	tests := []struct {
+		name string
+		ir   *SlurmJobIR
+		want bool
+	}{
+		{
+			name: "PodGroup is one job per group",
+			ir:   &SlurmJobIR{RootPOM: metav1.PartialObjectMetadata{TypeMeta: podGroup_v1alpha1}},
+			want: true,
+		},
+		{
+			name: "JobSet is one job per group",
+			ir:   &SlurmJobIR{RootPOM: metav1.PartialObjectMetadata{TypeMeta: jobSet_v1alpha2}},
+			want: true,
+		},
+		{
+			name: "LWS is one job per group",
+			ir:   &SlurmJobIR{RootPOM: metav1.PartialObjectMetadata{TypeMeta: lws_v1}},
+			want: true,
+		},
+		{
+			name: "standalone Pod is one job per pod",
+			ir:   &SlurmJobIR{RootPOM: metav1.PartialObjectMetadata{TypeMeta: pod_v1}},
+			want: false,
+		},
+		{
+			name: "Job is one job per pod",
+			ir:   &SlurmJobIR{RootPOM: metav1.PartialObjectMetadata{TypeMeta: job_v1}},
+			want: false,
+		},
+		{
+			name: "nil IR returns false and does not panic",
+			ir:   nil,
+			want: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := IsOneJobPerGroupWorkload(tt.ir); got != tt.want {
+				t.Errorf("IsOneJobPerGroupWorkload() = %v, want %v", got, tt.want)
 			}
 		})
 	}

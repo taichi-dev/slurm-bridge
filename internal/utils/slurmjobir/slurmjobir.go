@@ -59,6 +59,21 @@ type translator struct {
 	ctx context.Context
 }
 
+// IsOneJobPerGroupWorkload returns true when the workload uses one Slurm placeholder job per group
+// (PodGroup, JobSet, LWS). When false, the workload uses one job per pod (standalone Pod or Job).
+// Returns false if ir is nil.
+func IsOneJobPerGroupWorkload(ir *SlurmJobIR) bool {
+	if ir == nil {
+		return false
+	}
+	switch ir.RootPOM.TypeMeta {
+	case podGroup_v1alpha1, jobSet_v1alpha2, lws_v1:
+		return true
+	default:
+		return false
+	}
+}
+
 func PreFilter(c client.Client, ctx context.Context, pod *corev1.Pod, slurmJobIR *SlurmJobIR) *fwk.Status {
 	t := translator{Reader: c, ctx: ctx}
 	switch slurmJobIR.RootPOM.TypeMeta {

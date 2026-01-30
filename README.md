@@ -74,9 +74,9 @@ Slurm is a full featured HPC workload manager. To highlight a few features:
 | Kubernetes | [v1.34](https://kubernetes.io/blog/2025/08/27/kubernetes-v1-34-release/) |
 | Slurm      | [25.05](https://www.schedmd.com/slurm-version-25-05-0-is-now-available/) |
 
-## Limitations
+## Slurm Configuration
 
-- Exclusive, whole node allocations are made for each pod.
+See [Slurm Configuration](docs/slurm-configuration.md) for best practices on configuring Slurm for use with slurm-bridge.
 
 ## Installation
 

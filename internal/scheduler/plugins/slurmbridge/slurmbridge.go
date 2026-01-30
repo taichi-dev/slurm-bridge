@@ -254,7 +254,7 @@ func (sb *SlurmBridge) PreFilter(ctx context.Context, state fwk.CycleState, pod 
 		if err != nil {
 			return nil, fwk.NewStatus(fwk.Error, err.Error())
 		}
-		err = sb.annotatePodsWithNodes(ctx, placeholderJob.JobId, kubeNodes.Clone(), &s.slurmJobIR.Pods)
+		err = sb.annotatePodsWithNodes(ctx, placeholderJob.JobId, kubeNodes, &s.slurmJobIR.Pods)
 		if err != nil {
 			return nil, fwk.NewStatus(fwk.Error, err.Error())
 		}
@@ -266,7 +266,7 @@ func (sb *SlurmBridge) PreFilter(ctx context.Context, state fwk.CycleState, pod 
 		// By passing the list of nodes in the placeholder job as PreFilterResult,
 		// Filter plugins will only run for nodes in the Slurm job. This is the final
 		// PreFilter step that must occur before pods are allowed to run.
-		return &framework.PreFilterResult{NodeNames: kubeNodes}, fwk.NewStatus(fwk.Success, "")
+		return &framework.PreFilterResult{NodeNames: sets.New(kubeNodes...)}, fwk.NewStatus(fwk.Success, "")
 	}
 }
 
@@ -314,9 +314,15 @@ func (sb *SlurmBridge) PostFilter(ctx context.Context, state fwk.CycleState, pod
 		}
 	}
 
+	// One job per group (PodGroup, JobSet, LWS): require feasible nodes >= len(pods).
+	// One job per pod (standalone Pod, Job): require at least one feasible node.
+	minNodesRequired := len(s.slurmJobIR.Pods.Items)
+	if !slurmjobir.IsOneJobPerGroupWorkload(s.slurmJobIR) {
+		minNodesRequired = 1
+	}
 	// If this situation occurs, the best we can do is trigger another
 	// scheduling cycle.
-	if len(s.slurmJobIR.JobInfo.Nodes) < len(s.slurmJobIR.Pods.Items) {
+	if len(s.slurmJobIR.JobInfo.Nodes) < minNodesRequired {
 		return nil, fwk.NewStatus(fwk.Success)
 	}
 
@@ -431,14 +437,24 @@ func (sb *SlurmBridge) labelPodsWithJobId(ctx context.Context, jobid int32, slur
 }
 
 // annotatePodsWithNodes will annotate a node assignment to pods
-func (sb *SlurmBridge) annotatePodsWithNodes(ctx context.Context, jobid int32, kubeNodes sets.Set[string], pods *corev1.PodList) error {
+func (sb *SlurmBridge) annotatePodsWithNodes(ctx context.Context, jobid int32, kubeNodes []string, pods *corev1.PodList) error {
 	logger := klog.FromContext(ctx)
-	for _, p := range pods.Items {
-		// Return if there are no nodes left
-		if kubeNodes.Len() == 0 {
-			logger.V(5).Info("no nodes left to annotate")
-			break
+	// Sort pods in deterministic order (namespace, name) so that the
+	// i-th node in the Slurm nodelist is assigned to the i-th pod in that order.
+	indices := make([]int, len(pods.Items))
+	for i := range indices {
+		indices[i] = i
+	}
+	slices.SortFunc(indices, func(i, j int) int {
+		a, b := pods.Items[i], pods.Items[j]
+		if a.Namespace != b.Namespace {
+			return strings.Compare(a.Namespace, b.Namespace)
 		}
+		return strings.Compare(a.Name, b.Name)
+	})
+	nodeIndex := 0
+	for _, idx := range indices {
+		p := pods.Items[idx]
 		// If this pod doesn't have a JobId that matches, it should be skipped as
 		// it didn't exist when the placeholder job was created
 		podJobID := slurmjobir.ParseSlurmJobId(p.Labels[wellknown.LabelPlaceholderJobId])
@@ -446,14 +462,15 @@ func (sb *SlurmBridge) annotatePodsWithNodes(ctx context.Context, jobid int32, k
 			logger.V(5).Info("pod JobID does not match placeholder JobID")
 			continue
 		}
+		if nodeIndex >= len(kubeNodes) {
+			logger.V(5).Info("no nodes left to annotate")
+			return ErrorNoKubeNode
+		}
 		if p.Annotations == nil {
 			p.Annotations = make(map[string]string)
 		}
-		node, ok := kubeNodes.PopAny()
-		if !ok {
-			logger.V(4).Info("could not get a node to assign")
-			return ErrorNoKubeNode
-		}
+		node := kubeNodes[nodeIndex]
+		nodeIndex++
 		toUpdate := p.DeepCopy()
 		toUpdate.Annotations[wellknown.AnnotationPlaceholderNode] = node
 		if err := sb.Patch(ctx, toUpdate, client.StrategicMergeFrom(&p)); err != nil {
@@ -465,7 +482,8 @@ func (sb *SlurmBridge) annotatePodsWithNodes(ctx context.Context, jobid int32, k
 }
 
 // slurmToKubeNodes will translate slurm node names to kubernetes node names
-func (sb *SlurmBridge) slurmToKubeNodes(ctx context.Context, slurmNodes []string) (sets.Set[string], error) {
+// preserving order so pod-to-node assignment matches Slurm task layout.
+func (sb *SlurmBridge) slurmToKubeNodes(ctx context.Context, slurmNodes []string) ([]string, error) {
 	logger := klog.FromContext(ctx)
 
 	nodeList := &corev1.NodeList{}
@@ -474,7 +492,7 @@ func (sb *SlurmBridge) slurmToKubeNodes(ctx context.Context, slurmNodes []string
 		return nil, err
 	}
 
-	kubeNodes := make(sets.Set[string])
+	kubeNodes := make([]string, 0, len(slurmNodes))
 	nodeNameMap := nodecontrollerutils.MakeNodeNameMap(ctx, nodeList)
 	for _, slurmNode := range slurmNodes {
 		kubeNode, ok := nodeNameMap[slurmNode]
@@ -492,9 +510,8 @@ func (sb *SlurmBridge) slurmToKubeNodes(ctx context.Context, slurmNodes []string
 			} else {
 				return nil, ErrorNoKubeNodeMatch
 			}
-
 		}
-		kubeNodes.Insert(kubeNode)
+		kubeNodes = append(kubeNodes, kubeNode)
 	}
 
 	return kubeNodes, nil
