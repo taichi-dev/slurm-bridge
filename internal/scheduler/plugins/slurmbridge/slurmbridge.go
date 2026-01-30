@@ -254,7 +254,7 @@ func (sb *SlurmBridge) PreFilter(ctx context.Context, state fwk.CycleState, pod 
 		if err != nil {
 			return nil, fwk.NewStatus(fwk.Error, err.Error())
 		}
-		err = sb.annotatePodsWithNodes(ctx, placeholderJob.JobId, slices.Clone(kubeNodes), &s.slurmJobIR.Pods)
+		err = sb.annotatePodsWithNodes(ctx, placeholderJob.JobId, kubeNodes, &s.slurmJobIR.Pods)
 		if err != nil {
 			return nil, fwk.NewStatus(fwk.Error, err.Error())
 		}
