@@ -316,12 +316,8 @@ func (sb *SlurmBridge) PostFilter(ctx context.Context, state fwk.CycleState, pod
 
 	// One job per group (PodGroup, JobSet, LWS): require feasible nodes >= len(pods).
 	// One job per pod (standalone Pod, Job): require at least one feasible node.
-	submitIR := s.slurmJobIR
 	minNodesRequired := len(s.slurmJobIR.Pods.Items)
 	if !slurmjobir.IsOneJobPerGroupWorkload(s.slurmJobIR) {
-		singlePodIR := slurmjobir.BuildSinglePodIR(s.slurmJobIR, pod)
-		singlePodIR.JobInfo.Nodes = s.slurmJobIR.JobInfo.Nodes
-		submitIR = singlePodIR
 		minNodesRequired = 1
 	}
 	// If this situation occurs, the best we can do is trigger another
@@ -333,7 +329,7 @@ func (sb *SlurmBridge) PostFilter(ctx context.Context, state fwk.CycleState, pod
 	// If no placeholder job exists, we should create one with the list
 	// of nodes that passed Filter plugins.
 	if placeholderJob.JobId == 0 {
-		jobid, err := sb.slurmControl.SubmitJob(ctx, pod, submitIR)
+		jobid, err := sb.slurmControl.SubmitJob(ctx, pod, s.slurmJobIR)
 		if err != nil {
 			aggErrors := func() utilerrors.Aggregate {
 				var target utilerrors.Aggregate
@@ -350,7 +346,7 @@ func (sb *SlurmBridge) PostFilter(ctx context.Context, state fwk.CycleState, pod
 			return nil, fwk.NewStatus(fwk.Error, err.Error())
 		}
 		logger.V(5).Info("submitted placeholder to slurm", klog.KObj(pod))
-		err = sb.labelPodsWithJobId(ctx, jobid, submitIR)
+		err = sb.labelPodsWithJobId(ctx, jobid, s.slurmJobIR)
 		if err != nil {
 			return nil, fwk.NewStatus(fwk.Error, err.Error())
 		}
@@ -362,14 +358,14 @@ func (sb *SlurmBridge) PostFilter(ctx context.Context, state fwk.CycleState, pod
 		logger.V(4).Info("placeholder job exists but no nodes have been allocated")
 		// As the placeholder job is not yet running, update to the job
 		// to include any changes from slurmJobIR.
-		jobid, err := sb.slurmControl.UpdateJob(ctx, pod, submitIR)
+		jobid, err := sb.slurmControl.UpdateJob(ctx, pod, s.slurmJobIR)
 		if err != nil {
 			logger.Error(err, "error updating Slurm job")
 			return nil, fwk.NewStatus(fwk.Error, err.Error())
 		}
 		// Update the pods with the jobId label in case there
 		// are new pods included in slurmJobIR after the update.
-		err = sb.labelPodsWithJobId(ctx, jobid, submitIR)
+		err = sb.labelPodsWithJobId(ctx, jobid, s.slurmJobIR)
 		if err != nil {
 			logger.Error(err, "error labeling pods after update")
 			return nil, fwk.NewStatus(fwk.Error, err.Error())

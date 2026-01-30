@@ -110,6 +110,10 @@ func TestTranslateToSlurmJobIR(t *testing.T) {
 				JobInfo: SlurmJobIRJobInfo{
 					Account: ptr.To("test1"),
 					GroupId: ptr.To("1000"),
+					MinNodes: func() *int32 {
+						minNodes := int32(1)
+						return &minNodes
+					}(),
 					MaxNodes: func() *int32 {
 						maxNodes := int32(1)
 						return &maxNodes
@@ -146,14 +150,9 @@ func TestTranslateToSlurmJobIR(t *testing.T) {
 					Items: []corev1.Pod{*podWithBadAnnotation.DeepCopy()},
 				},
 				JobInfo: SlurmJobIRJobInfo{
-					MaxNodes: func() *int32 {
-						maxNodes := int32(1)
-						return &maxNodes
-					}(),
-					TasksPerNode: func() *int32 {
-						tasksPerNode := int32(1)
-						return &tasksPerNode
-					}(),
+					MinNodes:     ptr.To(int32(1)),
+					MaxNodes:     ptr.To(int32(1)),
+					TasksPerNode: ptr.To(int32(1)),
 				},
 			},
 			wantErr: true,
@@ -545,47 +544,5 @@ func TestIsOneJobPerGroupWorkload(t *testing.T) {
 				t.Errorf("IsOneJobPerGroupWorkload() = %v, want %v", got, tt.want)
 			}
 		})
-	}
-}
-
-func TestBuildSinglePodIR(t *testing.T) {
-	pod := podWithResources("2", "256Mi", "2", "512Mi")
-	pod.Namespace = "default"
-	pod.Name = "test-pod"
-	ir := &SlurmJobIR{
-		RootPOM: metav1.PartialObjectMetadata{TypeMeta: pod_v1, ObjectMeta: metav1.ObjectMeta{Name: "test-pod", Namespace: "default"}},
-		Pods:    corev1.PodList{Items: []corev1.Pod{pod, podWithResources("1", "128Mi", "1", "256Mi")}},
-		JobInfo: SlurmJobIRJobInfo{
-			Account:   ptr.To("test"),
-			Partition: ptr.To("debug"),
-			MinNodes:  ptr.To(int32(2)),
-			MaxNodes:  ptr.To(int32(2)),
-		},
-	}
-	parsePodsCpuAndMemory(ir)
-	parseGPUDevicePlugin(ir)
-
-	single := BuildSinglePodIR(ir, &pod)
-	if single == nil {
-		t.Fatal("BuildSinglePodIR() returned nil")
-	}
-	if len(single.Pods.Items) != 1 {
-		t.Errorf("BuildSinglePodIR() Pods.Items length = %d, want 1", len(single.Pods.Items))
-	}
-	if single.Pods.Items[0].Name != pod.Name {
-		t.Errorf("BuildSinglePodIR() pod name = %s, want %s", single.Pods.Items[0].Name, pod.Name)
-	}
-	if !apiequality.Semantic.DeepEqual(single.RootPOM, ir.RootPOM) {
-		t.Error("BuildSinglePodIR() RootPOM should match original")
-	}
-	if ptr.Deref(single.JobInfo.MinNodes, 0) != 1 || ptr.Deref(single.JobInfo.MaxNodes, 0) != 1 {
-		t.Errorf("BuildSinglePodIR() MinNodes=%v MaxNodes=%v, want 1, 1", single.JobInfo.MinNodes, single.JobInfo.MaxNodes)
-	}
-	if ptr.Deref(single.JobInfo.Account, "") != "test" || ptr.Deref(single.JobInfo.Partition, "") != "debug" {
-		t.Errorf("BuildSinglePodIR() Account/Partition should be copied from original")
-	}
-	// Single pod has 2 CPU, 512Mi from the pod we passed
-	if ptr.Deref(single.JobInfo.CpuPerTask, 0) != 2 {
-		t.Errorf("BuildSinglePodIR() CpuPerTask = %v, want 2", single.JobInfo.CpuPerTask)
 	}
 }
