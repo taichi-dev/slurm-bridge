@@ -37,13 +37,6 @@ represented Pods. This scheduler defers scheduling decisions to Slurm, hence
 certain assumptions about the environment must be met for this to function
 correctly.
 
-### Slurm configuration
-
-To allow multiple pods to be scheduled on a single node, the `OverSubscribe` configuration must be set to `YES` or `FORCE` on the partition in slurm.conf.
-
-For more detail on resource sharing in Slurm, see
-[cons_tres resource sharing](https://slurm.schedmd.com/cons_tres_share.html).
-
 ### Sequence Diagram
 
 ```mermaid

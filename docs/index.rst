@@ -106,7 +106,7 @@ Compatibility
 Limitations
 -----------
 
-- To allow multiple pods per multi-GPU node, the Slurm partition used by slurm-bridge must be configured for node sharing (see the Scheduler documentation, "Slurm configuration" section).
+- To allow multiple pods per multi-GPU node, the Slurm partition used by slurm-bridge must be configured for node sharing (see the Scheduler documentation, "Bin-Packing" section).
 
 Installation
 ------------
