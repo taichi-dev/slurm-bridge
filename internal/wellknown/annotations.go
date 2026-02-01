@@ -3,6 +3,8 @@
 
 package wellknown
 
+import "slices"
+
 const (
 	// AnnotationPlaceholderNode indicates the Node which corresponds to the
 	// the pod's placeholder job.
@@ -58,4 +60,16 @@ const (
 	// AnnotationWckey sets the Wckey
 	// for the Slurm placeholder job.
 	AnnotationWckey = SlurmJobPrefix + "wckey"
+	// AnnotationShared sets the shared policy
+	// for the Slurm placeholder job (V0044JobDescMsgShared).
+	AnnotationShared = SlurmJobPrefix + "shared"
 )
+
+// SharedAllowedValues are the allowed values for the shared annotation
+// (V0044JobDescMsgShared in slurm-client).
+var SharedAllowedValues = []string{"mcs", "none", "oversubscribe", "topo", "user"}
+
+// IsValidSharedValue returns true if v is one of SharedAllowedValues.
+func IsValidSharedValue(v string) bool {
+	return slices.Contains(SharedAllowedValues, v)
+}

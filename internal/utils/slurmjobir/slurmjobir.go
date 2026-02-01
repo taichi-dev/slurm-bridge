@@ -41,6 +41,7 @@ type SlurmJobIRJobInfo struct {
 	Partition    *string
 	QOS          *string
 	Reservation  *string
+	Shared       *string // one of wellknown.SharedAllowedValues
 	TasksPerNode *int32
 	TimeLimit    *int32
 	UserId       *string
@@ -224,6 +225,11 @@ func parseAnnotations(slurmJobIR *SlurmJobIR, anno map[string]string) error {
 			slurmJobIR.JobInfo.QOS = &value
 		case wellknown.AnnotationReservation:
 			slurmJobIR.JobInfo.Reservation = &value
+		case wellknown.AnnotationShared:
+			if wellknown.IsValidSharedValue(value) {
+				slurmJobIR.JobInfo.Shared = &value
+			}
+			// Invalid value: skip (admission rejects)
 		case wellknown.AnnotationTimeLimit:
 			num, err := ConvStrTo32(value)
 			if err != nil {

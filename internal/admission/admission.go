@@ -18,6 +18,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
+	lwsv1 "sigs.k8s.io/lws/api/leaderworkerset/v1"
+	sched "sigs.k8s.io/scheduler-plugins/apis/scheduling/v1alpha1"
 )
 
 type PodAdmission struct {
@@ -86,6 +88,11 @@ func (r *PodAdmission) ValidateCreate(ctx context.Context, obj runtime.Object) (
 	if pod.Spec.ResourceClaims != nil {
 		return nil, fmt.Errorf("can't schedule a pod with a resourceclaim, use the annotation %s to request devices instead", wellknown.AnnotationGres)
 	}
+	if _, hasShared := pod.Annotations[wellknown.AnnotationShared]; hasShared {
+		if err := validateSharedAnnotation(pod); err != nil {
+			return nil, err
+		}
+	}
 	return nil, nil
 }
 
@@ -111,6 +118,11 @@ func (r *PodAdmission) ValidateUpdate(ctx context.Context, oldObj runtime.Object
 		if newPod.Annotations[wellknown.AnnotationPlaceholderNode] !=
 			oldPod.Annotations[wellknown.AnnotationPlaceholderNode] {
 			return nil, fmt.Errorf("can't update a running pod's placeholder node annotation")
+		}
+	}
+	if _, hasShared := newPod.Annotations[wellknown.AnnotationShared]; hasShared {
+		if err := validateSharedAnnotation(newPod); err != nil {
+			return nil, err
 		}
 	}
 	return nil, nil
@@ -139,4 +151,23 @@ func (r *PodAdmission) isManagedNamespace(ctx context.Context, namespace string)
 		return false, nil
 	}
 	return slices.Contains(r.ManagedNamespaces, namespace), nil
+}
+
+// validateSharedAnnotation validates the shared annotation when present.
+// Rejects invalid values and rejects the annotation on group workloads (PodGroup, LeaderWorkerSet).
+func validateSharedAnnotation(pod *corev1.Pod) error {
+	value, ok := pod.Annotations[wellknown.AnnotationShared]
+	if !ok {
+		return nil
+	}
+	if !wellknown.IsValidSharedValue(value) {
+		return fmt.Errorf("shared annotation value must be one of: mcs, none, oversubscribe, topo, user")
+	}
+	if pod.Labels[sched.PodGroupLabel] != "" {
+		return fmt.Errorf("shared annotation is not allowed on PodGroup pods")
+	}
+	if pod.Labels[lwsv1.GroupUniqueHashLabelKey] != "" {
+		return fmt.Errorf("shared annotation is not allowed on LeaderWorkerSet pods")
+	}
+	return nil
 }

@@ -144,6 +144,34 @@ func (r *realSlurmControl) UpdateJob(ctx context.Context, pod *corev1.Pod, slurm
 	return r.submitJob(ctx, pod, slurmJobIR, true)
 }
 
+// sharedForJob returns the Shared policy for the job. Uses the annotation only when
+// the placeholder job has a single pod; otherwise returns SharedNone.
+func sharedForJob(slurmJobIR *slurmjobir.SlurmJobIR) *[]v0044.V0044JobDescMsgShared {
+	if len(slurmJobIR.Pods.Items) != 1 || slurmJobIR.JobInfo.Shared == nil {
+		return &[]v0044.V0044JobDescMsgShared{v0044.V0044JobDescMsgSharedNone}
+	}
+	v := *slurmJobIR.JobInfo.Shared
+	if !wellknown.IsValidSharedValue(v) {
+		return &[]v0044.V0044JobDescMsgShared{v0044.V0044JobDescMsgSharedNone}
+	}
+	var shared v0044.V0044JobDescMsgShared
+	switch v {
+	case "mcs":
+		shared = v0044.V0044JobDescMsgSharedMcs
+	case "none":
+		shared = v0044.V0044JobDescMsgSharedNone
+	case "oversubscribe":
+		shared = v0044.V0044JobDescMsgSharedOversubscribe
+	case "topo":
+		shared = v0044.V0044JobDescMsgSharedTopo
+	case "user":
+		shared = v0044.V0044JobDescMsgSharedUser
+	default:
+		return &[]v0044.V0044JobDescMsgShared{v0044.V0044JobDescMsgSharedNone}
+	}
+	return &[]v0044.V0044JobDescMsgShared{shared}
+}
+
 // submitJob will create or update a placeholder job Slurm.
 func (r *realSlurmControl) submitJob(ctx context.Context, pod *corev1.Pod, slurmJobIR *slurmjobir.SlurmJobIR, update bool) (int32, error) {
 	logger := klog.FromContext(ctx)
@@ -190,8 +218,7 @@ func (r *realSlurmControl) submitJob(ctx context.Context, pod *corev1.Pod, slurm
 			}(),
 			Qos:         slurmJobIR.JobInfo.QOS,
 			Reservation: slurmJobIR.JobInfo.Reservation,
-			// SharedNone is effectively Exclusive
-			Shared:       &[]v0044.V0044JobDescMsgShared{v0044.V0044JobDescMsgSharedNone},
+			Shared:       sharedForJob(slurmJobIR),
 			TasksPerNode: slurmJobIR.JobInfo.TasksPerNode,
 			TimeLimit: func() *v0044.V0044Uint32NoValStruct {
 				if slurmJobIR.JobInfo.TimeLimit != nil {
