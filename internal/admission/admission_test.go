@@ -678,6 +678,75 @@ func TestPodAdmission_ValidateUpdate(t *testing.T) {
 			want:    nil,
 			wantErr: true,
 		},
+		{
+			name: "CantChangeSharedAnnotationWhenPlaceholderJobRunning",
+			fields: fields{
+				ManagedNamespaces: []string{namespace},
+			},
+			args: args{
+				ctx: context.TODO(),
+				oldObj: &corev1.Pod{
+					ObjectMeta: metav1.ObjectMeta{
+						Namespace: namespace,
+						Labels: map[string]string{
+							wellknown.LabelPlaceholderJobId: "1",
+						},
+						Annotations: map[string]string{
+							wellknown.AnnotationPlaceholderNode: "node1",
+						},
+					},
+				},
+				newObj: &corev1.Pod{
+					ObjectMeta: metav1.ObjectMeta{
+						Namespace: namespace,
+						Labels: map[string]string{
+							wellknown.LabelPlaceholderJobId: "1",
+						},
+						Annotations: map[string]string{
+							wellknown.AnnotationPlaceholderNode: "node1",
+							wellknown.AnnotationShared:           "user",
+						},
+					},
+				},
+			},
+			want:    nil,
+			wantErr: true,
+		},
+		{
+			name: "CantChangeSharedAnnotationValueWhenPlaceholderJobRunning",
+			fields: fields{
+				ManagedNamespaces: []string{namespace},
+			},
+			args: args{
+				ctx: context.TODO(),
+				oldObj: &corev1.Pod{
+					ObjectMeta: metav1.ObjectMeta{
+						Namespace: namespace,
+						Labels: map[string]string{
+							wellknown.LabelPlaceholderJobId: "1",
+						},
+						Annotations: map[string]string{
+							wellknown.AnnotationPlaceholderNode: "node1",
+							wellknown.AnnotationShared:           "user",
+						},
+					},
+				},
+				newObj: &corev1.Pod{
+					ObjectMeta: metav1.ObjectMeta{
+						Namespace: namespace,
+						Labels: map[string]string{
+							wellknown.LabelPlaceholderJobId: "1",
+						},
+						Annotations: map[string]string{
+							wellknown.AnnotationPlaceholderNode: "node1",
+							wellknown.AnnotationShared:           "none",
+						},
+					},
+				},
+			},
+			want:    nil,
+			wantErr: true,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
