@@ -144,25 +144,20 @@ func (r *realSlurmControl) UpdateJob(ctx context.Context, pod *corev1.Pod, slurm
 	return r.submitJob(ctx, pod, slurmJobIR, true)
 }
 
-// sharedForJob returns the Shared policy for the job. Uses the annotation only when
-// the placeholder job has a single pod; otherwise returns SharedNone.
+// sharedForJob returns the shared policy for the job
 func sharedForJob(slurmJobIR *slurmjobir.SlurmJobIR) *[]v0044.V0044JobDescMsgShared {
 	if len(slurmJobIR.Pods.Items) != 1 || slurmJobIR.JobInfo.Shared == nil {
 		return &[]v0044.V0044JobDescMsgShared{v0044.V0044JobDescMsgSharedNone}
 	}
-	var shared v0044.V0044JobDescMsgShared
-	switch *slurmJobIR.JobInfo.Shared {
-	case "mcs":
-		shared = v0044.V0044JobDescMsgSharedMcs
-	case "none":
-		shared = v0044.V0044JobDescMsgSharedNone
-	case "oversubscribe":
-		shared = v0044.V0044JobDescMsgSharedOversubscribe
-	case "topo":
-		shared = v0044.V0044JobDescMsgSharedTopo
-	case "user":
-		shared = v0044.V0044JobDescMsgSharedUser
-	default:
+	shared, ok := map[string]v0044.V0044JobDescMsgShared{
+		"mcs":           v0044.V0044JobDescMsgSharedMcs,
+		"none":          v0044.V0044JobDescMsgSharedNone,
+		"oversubscribe": v0044.V0044JobDescMsgSharedOversubscribe,
+		"topo":          v0044.V0044JobDescMsgSharedTopo,
+		"user":          v0044.V0044JobDescMsgSharedUser,
+	}[*slurmJobIR.JobInfo.Shared]
+
+	if !ok {
 		shared = v0044.V0044JobDescMsgSharedNone
 	}
 	return &[]v0044.V0044JobDescMsgShared{shared}

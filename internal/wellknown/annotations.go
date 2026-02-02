@@ -64,7 +64,7 @@ const (
 	// for the Slurm placeholder job.
 	AnnotationWckey = SlurmJobPrefix + "wckey"
 	// AnnotationShared sets the shared policy
-	// for the Slurm placeholder job (V0044JobDescMsgShared).
+	// for the Slurm placeholder job.
 	AnnotationShared = SlurmJobPrefix + "shared"
 )
 
