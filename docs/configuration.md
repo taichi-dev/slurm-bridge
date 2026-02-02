@@ -2,7 +2,6 @@
 
 ## Pack Multiple Pods on a Node
 
-
 By default, Slurm will reserve a full node for each job. To enable packing, adjust slurm.conf:
 
 - **OverSubscribe** — Set to `YES` or `FORCE` on the partition so multiple jobs (pods) can share nodes.
