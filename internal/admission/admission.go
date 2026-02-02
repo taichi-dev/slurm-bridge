@@ -88,10 +88,8 @@ func (r *PodAdmission) ValidateCreate(ctx context.Context, obj runtime.Object) (
 	if pod.Spec.ResourceClaims != nil {
 		return nil, fmt.Errorf("can't schedule a pod with a resourceclaim, use the annotation %s to request devices instead", wellknown.AnnotationGres)
 	}
-	if _, hasShared := pod.Annotations[wellknown.AnnotationShared]; hasShared {
-		if err := validateSharedAnnotation(pod); err != nil {
-			return nil, err
-		}
+	if err := validateSharedAnnotation(pod); err != nil {
+		return nil, err
 	}
 	return nil, nil
 }
@@ -120,18 +118,16 @@ func (r *PodAdmission) ValidateUpdate(ctx context.Context, oldObj runtime.Object
 			return nil, fmt.Errorf("can't update a running pod's placeholder node annotation")
 		}
 	}
-	// Reject changing the shared annotation when the Slurm placeholder job is
-	// already running (job has nodes assigned); the Slurm job cannot be updated.
+	// Once the Slurm placeholder job is already running she shared annotation
+	// should not be modified.
 	if newPod.Labels[wellknown.LabelPlaceholderJobId] != "" &&
 		newPod.Annotations[wellknown.AnnotationPlaceholderNode] != "" {
 		if oldPod.Annotations[wellknown.AnnotationShared] != newPod.Annotations[wellknown.AnnotationShared] {
 			return nil, fmt.Errorf("can't change shared annotation when the Slurm placeholder job is already running")
 		}
 	}
-	if _, hasShared := newPod.Annotations[wellknown.AnnotationShared]; hasShared {
-		if err := validateSharedAnnotation(newPod); err != nil {
-			return nil, err
-		}
+	if err := validateSharedAnnotation(newPod); err != nil {
+		return nil, err
 	}
 	return nil, nil
 }
@@ -168,8 +164,8 @@ func validateSharedAnnotation(pod *corev1.Pod) error {
 	if !ok {
 		return nil
 	}
-	if !wellknown.IsValidSharedValue(value) {
-		return fmt.Errorf("shared annotation value must be one of: mcs, none, oversubscribe, topo, user")
+	if err := wellknown.ValidateSharedValue(value); err != nil {
+		return err
 	}
 	if pod.Labels[sched.PodGroupLabel] != "" {
 		return fmt.Errorf("shared annotation is not allowed on PodGroup pods")

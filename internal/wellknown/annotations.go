@@ -3,7 +3,10 @@
 
 package wellknown
 
-import "slices"
+import (
+	"fmt"
+	"slices"
+)
 
 const (
 	// AnnotationPlaceholderNode indicates the Node which corresponds to the
@@ -69,7 +72,10 @@ const (
 // (V0044JobDescMsgShared in slurm-client).
 var SharedAllowedValues = []string{"mcs", "none", "oversubscribe", "topo", "user"}
 
-// IsValidSharedValue returns true if v is one of SharedAllowedValues.
-func IsValidSharedValue(v string) bool {
-	return slices.Contains(SharedAllowedValues, v)
+// ValidateSharedValue returns true if v is one of SharedAllowedValues.
+func ValidateSharedValue(v string) error {
+	if slices.Contains(SharedAllowedValues, v) {
+		return nil
+	}
+	return fmt.Errorf("shared annotation value must be one of: mcs, none, oversubscribe, topo, user")
 }

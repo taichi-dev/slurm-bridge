@@ -226,10 +226,10 @@ func parseAnnotations(slurmJobIR *SlurmJobIR, anno map[string]string) error {
 		case wellknown.AnnotationReservation:
 			slurmJobIR.JobInfo.Reservation = &value
 		case wellknown.AnnotationShared:
-			if wellknown.IsValidSharedValue(value) {
-				slurmJobIR.JobInfo.Shared = &value
+			if err := wellknown.ValidateSharedValue(value); err != nil {
+				return err
 			}
-			// Invalid value: skip (admission rejects)
+			slurmJobIR.JobInfo.Shared = &value
 		case wellknown.AnnotationTimeLimit:
 			num, err := ConvStrTo32(value)
 			if err != nil {

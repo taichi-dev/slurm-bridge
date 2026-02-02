@@ -679,7 +679,7 @@ func TestPodAdmission_ValidateUpdate(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			name: "CantChangeSharedAnnotationWhenPlaceholderJobRunning",
+			name: "AddSharedAnnotationWhenPlaceholderJobRunning",
 			fields: fields{
 				ManagedNamespaces: []string{namespace},
 			},
@@ -704,7 +704,7 @@ func TestPodAdmission_ValidateUpdate(t *testing.T) {
 						},
 						Annotations: map[string]string{
 							wellknown.AnnotationPlaceholderNode: "node1",
-							wellknown.AnnotationShared:           "user",
+							wellknown.AnnotationShared:          "user",
 						},
 					},
 				},
@@ -713,7 +713,7 @@ func TestPodAdmission_ValidateUpdate(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			name: "CantChangeSharedAnnotationValueWhenPlaceholderJobRunning",
+			name: "ChangeSharedAnnotationValueWhenPlaceholderJobRunning",
 			fields: fields{
 				ManagedNamespaces: []string{namespace},
 			},
@@ -727,7 +727,7 @@ func TestPodAdmission_ValidateUpdate(t *testing.T) {
 						},
 						Annotations: map[string]string{
 							wellknown.AnnotationPlaceholderNode: "node1",
-							wellknown.AnnotationShared:           "user",
+							wellknown.AnnotationShared:          "user",
 						},
 					},
 				},
@@ -739,7 +739,7 @@ func TestPodAdmission_ValidateUpdate(t *testing.T) {
 						},
 						Annotations: map[string]string{
 							wellknown.AnnotationPlaceholderNode: "node1",
-							wellknown.AnnotationShared:           "none",
+							wellknown.AnnotationShared:          "none",
 						},
 					},
 				},

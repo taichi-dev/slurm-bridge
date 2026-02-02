@@ -150,12 +150,8 @@ func sharedForJob(slurmJobIR *slurmjobir.SlurmJobIR) *[]v0044.V0044JobDescMsgSha
 	if len(slurmJobIR.Pods.Items) != 1 || slurmJobIR.JobInfo.Shared == nil {
 		return &[]v0044.V0044JobDescMsgShared{v0044.V0044JobDescMsgSharedNone}
 	}
-	v := *slurmJobIR.JobInfo.Shared
-	if !wellknown.IsValidSharedValue(v) {
-		return &[]v0044.V0044JobDescMsgShared{v0044.V0044JobDescMsgSharedNone}
-	}
 	var shared v0044.V0044JobDescMsgShared
-	switch v {
+	switch *slurmJobIR.JobInfo.Shared {
 	case "mcs":
 		shared = v0044.V0044JobDescMsgSharedMcs
 	case "none":
@@ -167,7 +163,7 @@ func sharedForJob(slurmJobIR *slurmjobir.SlurmJobIR) *[]v0044.V0044JobDescMsgSha
 	case "user":
 		shared = v0044.V0044JobDescMsgSharedUser
 	default:
-		return &[]v0044.V0044JobDescMsgShared{v0044.V0044JobDescMsgSharedNone}
+		shared = v0044.V0044JobDescMsgSharedNone
 	}
 	return &[]v0044.V0044JobDescMsgShared{shared}
 }
@@ -216,8 +212,8 @@ func (r *realSlurmControl) submitJob(ctx context.Context, pod *corev1.Pod, slurm
 					return slurmJobIR.JobInfo.Partition
 				}
 			}(),
-			Qos:         slurmJobIR.JobInfo.QOS,
-			Reservation: slurmJobIR.JobInfo.Reservation,
+			Qos:          slurmJobIR.JobInfo.QOS,
+			Reservation:  slurmJobIR.JobInfo.Reservation,
 			Shared:       sharedForJob(slurmJobIR),
 			TasksPerNode: slurmJobIR.JobInfo.TasksPerNode,
 			TimeLimit: func() *v0044.V0044Uint32NoValStruct {
