@@ -24,7 +24,7 @@ nodesets:
         OverSubscribe=YES
 ```
 
-Then set the annotation `slurmjob.slinky.slurm.net/shared` to `user` so add this setting to the slurm job, enabling it to be scheduled on busy nodes whose jobs are owned by the same user.
+By default, slurm-bridge will schedule jobs with "shared: none". In order to allow jobs to share nodes, set the Pod's `slurmjob.slinky.slurm.net/shared` annotation to `user`.
 
 For more details, see:
 - [cons_tres resource sharing](https://slurm.schedmd.com/cons_tres_share.html).
