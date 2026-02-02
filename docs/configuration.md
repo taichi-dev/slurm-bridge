@@ -2,13 +2,22 @@
 
 ## Pack Multiple Pods on a Node
 
+Changes need to be made in Slurm and slurm-bridge to pack multiple pods on a node.
+
 By default, Slurm will reserve a full node for each job. To enable packing, adjust slurm.conf:
 
-- **OverSubscribe** — Set to `YES` or `FORCE` on the partition so multiple jobs (pods) can share nodes.
+```
+# Set Oversubscribe to YES or FORCE
+PartitionName=<name> ... OverSubscribe=YES
+```
 
-- **SchedulerParameters** - Set:
-  - `bf_busy_nodes` — Backfill scheduler prefers nodes that are already busy, packing jobs onto fewer nodes and leaving others idle for whole-node jobs.
-  - `pack_serial_at_end` — Schedules serial jobs at the end of the backfill window to reduce fragmentation and improve packing.
+Optional tuning parameters:
+```
+# pack_serial_at_end: schedules serial jobs at the end of the backfill window to reduce fragmentation and improve packing.
+# bf_busy_nodes: backfill scheduler prefers nodes that are already busy, packing jobs onto fewer nodes and leaving others idle for whole-node jobs. This only applies
+
+SchedulerParameters=pack_serial_at_end,bf_busy_nodes
+```
 
 When using slinky, this can be set by adjusting its `values.yaml`:
 
