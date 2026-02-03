@@ -118,8 +118,7 @@ func (r *PodAdmission) ValidateUpdate(ctx context.Context, oldObj runtime.Object
 			return nil, fmt.Errorf("can't update a running pod's placeholder node annotation")
 		}
 	}
-	// Once the Slurm placeholder job is already running, the shared annotation
-	// should not be modified.
+	// Once the Slurm placeholder job is running, the shared annotation should not be modified.
 	if newPod.Labels[wellknown.LabelPlaceholderJobId] != "" &&
 		newPod.Annotations[wellknown.AnnotationPlaceholderNode] != "" {
 		if oldPod.Annotations[wellknown.AnnotationShared] != newPod.Annotations[wellknown.AnnotationShared] {
@@ -157,8 +156,8 @@ func (r *PodAdmission) isManagedNamespace(ctx context.Context, namespace string)
 	return slices.Contains(r.ManagedNamespaces, namespace), nil
 }
 
-// validateSharedAnnotation validates the shared annotation when present.
-// Rejects invalid values and rejects the annotation on group workloads (PodGroup, LeaderWorkerSet).
+// validateSharedAnnotation validates the shared annotation value and rejects
+// group workloads (PodGroup, LeaderWorkerSet).
 func validateSharedAnnotation(pod *corev1.Pod) error {
 	value, ok := pod.Annotations[wellknown.AnnotationShared]
 	if !ok {
