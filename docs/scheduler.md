@@ -95,11 +95,14 @@ see the [annotations.go] source.
 
 | Annotation                             | Description                       | Example      |
 | -------------------------------------- | --------------------------------- | ------------ |
-| slurmjob.slinky.slurm.net/gres         | Overrides the default gres.       | "GPU:V100:2" |
-| slurmjob.slinky.slurm.net/job-name     | Sets the job name.                | "research"   |
-| slurmjob.slinky.slurm.net/max-nodes    | Sets the maximum number of nodes. | "3"          |
-| slurmjob.slinky.slurm.net/mem-per-node | Sets the amount of memory.        | "8Gi"        |
-| slurmjob.slinky.slurm.net/partition    | Overrides the default partition.  | "debug"      |
+| Annotation                             | Description                                                          | Example      |
+| -------------------------------------- | -------------------------------------------------------------------- | ------------ |
+| slurmjob.slinky.slurm.net/gres         | Overrides the default gres.                                          | "GPU:V100:2" |
+| slurmjob.slinky.slurm.net/job-name     | Sets the job name.                                                   | "research"   |
+| slurmjob.slinky.slurm.net/max-nodes    | Sets the maximum number of nodes.                                    | "3"          |
+| slurmjob.slinky.slurm.net/mem-per-node | Sets the amount of memory.                                           | "8Gi"        |
+| slurmjob.slinky.slurm.net/partition    | Overrides the default partition.                                     | "debug"      |
+| slurmjob.slinky.slurm.net/shared       | Sets the shared policy. Allowed: "none", "user". Only supported on single-pod workloads. | "user" |
 
 An example of the annotations in use:
 

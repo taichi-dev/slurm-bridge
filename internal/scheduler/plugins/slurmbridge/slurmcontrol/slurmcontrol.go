@@ -61,15 +61,20 @@ type GresLayout struct {
 	Type  string
 }
 
-func sharedFromExclusiveAnnotation(slurmJobIR *slurmjobir.SlurmJobIR) *[]api.V0044JobDescMsgShared {
-	exclusive := true
-	if slurmJobIR != nil && slurmJobIR.JobInfo.Exclusive != nil {
-		exclusive = *slurmJobIR.JobInfo.Exclusive
-	}
-	if exclusive {
+// sharedForJob returns the shared policy for the job based on the shared annotation.
+// Defaults to SharedNone (exclusive) when not set or for group workloads.
+func sharedForJob(slurmJobIR *slurmjobir.SlurmJobIR) *[]api.V0044JobDescMsgShared {
+	if len(slurmJobIR.Pods.Items) != 1 || slurmJobIR.JobInfo.Shared == nil {
 		return &[]api.V0044JobDescMsgShared{api.V0044JobDescMsgSharedNone}
 	}
-	return &[]api.V0044JobDescMsgShared{}
+	shared, ok := map[string]api.V0044JobDescMsgShared{
+		"none": api.V0044JobDescMsgSharedNone,
+		"user": api.V0044JobDescMsgSharedUser,
+	}[*slurmJobIR.JobInfo.Shared]
+	if !ok {
+		shared = api.V0044JobDescMsgSharedNone
+	}
+	return &[]api.V0044JobDescMsgShared{shared}
 }
 
 // DeleteSlurmJob will delete an external job
@@ -201,7 +206,7 @@ func (r *realSlurmControl) submitJob(ctx context.Context, pod *corev1.Pod, slurm
 			}(),
 			Qos:          slurmJobIR.JobInfo.QOS,
 			Reservation:  slurmJobIR.JobInfo.Reservation,
-			Shared:       sharedFromExclusiveAnnotation(slurmJobIR),
+			Shared:       sharedForJob(slurmJobIR),
 			TasksPerNode: slurmJobIR.JobInfo.TasksPerNode,
 			TimeLimit: func() *api.V0044Uint32NoValStruct {
 				if slurmJobIR.JobInfo.TimeLimit != nil {
