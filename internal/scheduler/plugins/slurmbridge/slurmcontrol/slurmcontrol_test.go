@@ -27,48 +27,45 @@ import (
 	"k8s.io/utils/ptr"
 )
 
-func Test_sharedFromExclusiveAnnotation(t *testing.T) {
+func Test_sharedForJob(t *testing.T) {
+	onePod := corev1.PodList{Items: []corev1.Pod{{}}}
 	tests := []struct {
-		name          string
-		slurmJobIR    *slurmjobir.SlurmJobIR
-		wantExclusive bool
+		name       string
+		slurmJobIR *slurmjobir.SlurmJobIR
+		wantShared api.V0044JobDescMsgShared
 	}{
 		{
-			name:          "nil slurmJobIR defaults to exclusive",
-			slurmJobIR:    nil,
-			wantExclusive: true,
+			name:       "no Shared annotation defaults to SharedNone",
+			slurmJobIR: &slurmjobir.SlurmJobIR{Pods: onePod},
+			wantShared: api.V0044JobDescMsgSharedNone,
 		},
 		{
-			name:          "slurmJobIR with Exclusive nil defaults to exclusive",
-			slurmJobIR:    &slurmjobir.SlurmJobIR{},
-			wantExclusive: true,
+			name:       "Shared=none yields SharedNone",
+			slurmJobIR: &slurmjobir.SlurmJobIR{Pods: onePod, JobInfo: slurmjobir.SlurmJobIRJobInfo{Shared: ptr.To("none")}},
+			wantShared: api.V0044JobDescMsgSharedNone,
 		},
 		{
-			name:          "slurmJobIR.Exclusive true",
-			slurmJobIR:    &slurmjobir.SlurmJobIR{JobInfo: slurmjobir.SlurmJobIRJobInfo{Exclusive: ptr.To(true)}},
-			wantExclusive: true,
+			name:       "Shared=user yields SharedUser",
+			slurmJobIR: &slurmjobir.SlurmJobIR{Pods: onePod, JobInfo: slurmjobir.SlurmJobIRJobInfo{Shared: ptr.To("user")}},
+			wantShared: api.V0044JobDescMsgSharedUser,
 		},
 		{
-			name:          "slurmJobIR.Exclusive false yields non-exclusive (empty Shared)",
-			slurmJobIR:    &slurmjobir.SlurmJobIR{JobInfo: slurmjobir.SlurmJobIRJobInfo{Exclusive: ptr.To(false)}},
-			wantExclusive: false,
+			name: "group workload (multiple pods) always yields SharedNone",
+			slurmJobIR: &slurmjobir.SlurmJobIR{
+				Pods:    corev1.PodList{Items: []corev1.Pod{{}, {}}},
+				JobInfo: slurmjobir.SlurmJobIRJobInfo{Shared: ptr.To("user")},
+			},
+			wantShared: api.V0044JobDescMsgSharedNone,
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := sharedFromExclusiveAnnotation(tt.slurmJobIR)
-			if got == nil {
-				t.Fatalf("sharedFromExclusiveAnnotation() = nil")
+			got := sharedForJob(tt.slurmJobIR)
+			if got == nil || len(*got) != 1 {
+				t.Fatalf("sharedForJob() = %v, want single element", got)
 			}
-			if tt.wantExclusive {
-				if len(*got) != 1 {
-					t.Fatalf("sharedFromExclusiveAnnotation() = %v, want single element (exclusive)", got)
-				}
-				if (*got)[0] != api.V0044JobDescMsgSharedNone {
-					t.Errorf("sharedFromExclusiveAnnotation() Shared = %v, want SharedNone", (*got)[0])
-				}
-			} else if len(*got) != 0 {
-				t.Errorf("sharedFromExclusiveAnnotation() = %v, want empty (non-exclusive)", got)
+			if (*got)[0] != tt.wantShared {
+				t.Errorf("sharedForJob() = %v, want %v", (*got)[0], tt.wantShared)
 			}
 		})
 	}
