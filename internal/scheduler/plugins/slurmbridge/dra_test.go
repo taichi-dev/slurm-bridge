@@ -81,6 +81,7 @@ func TestSlurmBridge_createRequestsAndMappings(t *testing.T) {
 		schedulerName string
 		slurmControl  slurmcontrol.SlurmControlInterface
 		handle        fwk.Handle
+		gpuTypeMap    map[string]string
 	}
 	type args struct {
 		ctx       context.Context
@@ -288,6 +289,75 @@ func TestSlurmBridge_createRequestsAndMappings(t *testing.T) {
 			},
 			wantRequests: 2,
 		},
+		{
+			// AutoDetect=nvidia reports GRES type "nvidia_b200"; gpuTypeMap
+			// resolves it to the gpu.nvidia.com DeviceClass so the claim and its
+			// request mapping are still created.
+			name: "AutoDetect model type mapped to gpu.nvidia.com",
+			fields: fields{
+				handle:     f,
+				gpuTypeMap: map[string]string{"nvidia_b200": nodeinfo.DraDriverGpuNvidia},
+				Client: fake.NewClientBuilder().
+					WithIndex(&resourcev1.ResourceSlice{}, "spec.nodeName", resourceSliceNodeIndex).
+					WithObjects(
+						&corev1.Node{
+							ObjectMeta: metav1.ObjectMeta{Name: "node1"},
+						},
+						&resourcev1.DeviceClass{
+							ObjectMeta: metav1.ObjectMeta{Name: nodeinfo.DraDriverGpuNvidia},
+						},
+						&resourcev1.ResourceSlice{
+							ObjectMeta: metav1.ObjectMeta{Name: "node1-gpu"},
+							Spec: resourcev1.ResourceSliceSpec{
+								NodeName: ptr.To("node1"),
+								Driver:   nodeinfo.DraDriverGpuNvidia,
+								Devices: []resourcev1.Device{
+									{Name: "gpu-0"},
+									{Name: "gpu-1"},
+								},
+							},
+						},
+					).
+					Build(),
+			},
+			args: args{
+				ctx: ctx,
+				pod: &corev1.Pod{
+					ObjectMeta: metav1.ObjectMeta{
+						Namespace: metav1.NamespaceDefault,
+						Name:      "foo",
+					},
+					Spec: corev1.PodSpec{
+						Containers: []corev1.Container{
+							{
+								Name: "foo",
+								Resources: corev1.ResourceRequirements{
+									Requests: corev1.ResourceList{
+										corev1.ResourceName("deviceclass.resource.kubernetes.io/gpu.nvidia.com"): resource.MustParse("2"),
+									},
+									Limits: corev1.ResourceList{
+										corev1.ResourceName("deviceclass.resource.kubernetes.io/gpu.nvidia.com"): resource.MustParse("2"),
+									},
+								},
+							},
+						},
+					},
+				},
+				nodeName: "node1",
+				resources: &slurmcontrol.NodeResources{
+					Node: "node1",
+					Gres: []slurmcontrol.GresLayout{
+						{
+							Name:  "gpu",
+							Type:  "nvidia_b200",
+							Count: 2,
+							Index: "0-1",
+						},
+					},
+				},
+			},
+			wantRequests: 1,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -296,14 +366,31 @@ func TestSlurmBridge_createRequestsAndMappings(t *testing.T) {
 				schedulerName: tt.fields.schedulerName,
 				slurmControl:  tt.fields.slurmControl,
 				handle:        tt.fields.handle,
+				gpuTypeMap:    tt.fields.gpuTypeMap,
 			}
-			gotClaim, _, err := sb.createRequestsAndMappings(tt.args.ctx, tt.args.pod, tt.args.nodeName, tt.args.resources)
+			gotClaim, gotMappings, err := sb.createRequestsAndMappings(tt.args.ctx, tt.args.pod, tt.args.nodeName, tt.args.resources)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("New() error = %v, wantErr %v", err, tt.wantErr)
 				return
 			}
+			if gotClaim == nil {
+				return
+			}
 			if len(gotClaim.Spec.Devices.Requests) != tt.wantRequests {
 				t.Errorf("SlurmBridge.createRequestsAndMappings() len(gotClaim.Spec.Devices.Requests) = %v, want %v", len(gotClaim.Spec.Devices.Requests), tt.wantRequests)
+			}
+			// Every requestMapping MUST reference a device-request that actually
+			// exists in the claim by name — the kubelet joins them by name to do
+			// CDI injection. A mismatch leaves the device allocated but never
+			// injected into the container (see createRequestsAndMappings).
+			claimReqNames := map[string]bool{}
+			for _, r := range gotClaim.Spec.Devices.Requests {
+				claimReqNames[r.Name] = true
+			}
+			for _, m := range gotMappings {
+				if !claimReqNames[m.RequestName] {
+					t.Errorf("requestMapping %+v references RequestName %q absent from claim requests %v", m, m.RequestName, claimReqNames)
+				}
 			}
 		})
 	}

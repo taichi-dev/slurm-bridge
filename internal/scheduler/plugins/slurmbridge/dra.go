@@ -17,7 +17,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	utilerrors "k8s.io/apimachinery/pkg/util/errors"
 	"k8s.io/klog/v2"
-	"k8s.io/kubernetes/pkg/util/slice"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -92,51 +91,50 @@ func (sb *SlurmBridge) createRequestsAndMappings(ctx context.Context, pod *corev
 		return nil, nil, err
 	}
 
-	deviceRequests, err := nodeInfo.GetDeviceRequests(ctx, sb.Client, resources)
+	deviceRequests, err := nodeInfo.GetDeviceRequests(ctx, sb.Client, resources, sb.gpuTypeMap)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	for containerIndex, container := range containers {
-		creqs := container.Resources.Requests
-		keys := make([]string, 0, len(creqs))
-		for k := range creqs {
-			keys = append(keys, k.String())
-		}
-		// resource requests in a container is a map, their names must
-		// be sorted to determine the resource's index order.
-		slice.SortStrings(keys)
-		for rName := range creqs {
-			ridx := 0
-			for j := range keys {
-				if keys[j] == rName.String() {
-					ridx = j
-					break
-				}
-			}
-			// containerIndex is the index of the container in the list of initContainers + containers.
-			// ridx is the index of the extended resource request in the sorted all requests in the container.
-			// crq is the quantity of the extended resource request.
-			reqName := fmt.Sprintf("container-%d-request-%d", containerIndex, ridx)
+	// The kubelet wires an allocated DRA device into a container by joining each
+	// requestMapping to a device-request in the ResourceClaim *by name*
+	// (mapping.RequestName must equal the claim request name, which is also the
+	// allocation result's request). GetDeviceRequests names the requests "cpu"
+	// (only when the CPU DRA driver is present) and gres.Name for each GRES, so
+	// the mappings MUST reuse those exact names. A synthetic
+	// "container-N-request-M" scheme never matches, so the device is allocated
+	// but never CDI-injected (no /dev/nvidia*, "no NVIDIA driver" in-container).
+	// Only emit a mapping when the claim actually carries a request of that name.
+	claimRequestNames := make(map[string]bool, len(deviceRequests))
+	for _, dr := range deviceRequests {
+		claimRequestNames[dr.Name] = true
+	}
+
+	for _, container := range containers {
+		for rName := range container.Resources.Requests {
 			if rName.String() == corev1.ResourceCPU.String() {
-				reqMap := corev1.ContainerExtendedResourceRequest{
-					ContainerName: container.Name,
-					RequestName:   reqName,
-					ResourceName:  corev1.ResourceCPU.String(),
+				if claimRequestNames[corev1.ResourceCPU.String()] {
+					mappings = append(mappings, corev1.ContainerExtendedResourceRequest{
+						ContainerName: container.Name,
+						RequestName:   corev1.ResourceCPU.String(),
+						ResourceName:  corev1.ResourceCPU.String(),
+					})
 				}
-				mappings = append(mappings, reqMap)
 				continue
 			}
 			for _, gres := range resources.Gres {
-				if !strings.HasSuffix(rName.String(), gres.Type) {
+				deviceClass := nodeinfo.ResolveDeviceClass(sb.gpuTypeMap, gres.Type)
+				if !strings.HasSuffix(rName.String(), deviceClass) {
 					continue
 				}
-				reqMap := corev1.ContainerExtendedResourceRequest{
-					ContainerName: container.Name,
-					RequestName:   reqName,
-					ResourceName:  resourcev1.ResourceDeviceClassPrefix + gres.Type,
+				if !claimRequestNames[gres.Name] {
+					continue
 				}
-				mappings = append(mappings, reqMap)
+				mappings = append(mappings, corev1.ContainerExtendedResourceRequest{
+					ContainerName: container.Name,
+					RequestName:   gres.Name,
+					ResourceName:  resourcev1.ResourceDeviceClassPrefix + deviceClass,
+				})
 			}
 		}
 	}
@@ -184,7 +182,7 @@ func (sb *SlurmBridge) bindClaim(
 		return err
 	}
 
-	devices, err := nodeInfo.GetDeviceRequestAllocationResult(ctx, sb.Client, resources)
+	devices, err := nodeInfo.GetDeviceRequestAllocationResult(ctx, sb.Client, resources, sb.gpuTypeMap)
 	if err != nil {
 		return err
 	}
