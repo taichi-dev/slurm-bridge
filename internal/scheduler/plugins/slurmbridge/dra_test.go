@@ -438,6 +438,96 @@ func hasContainerExtendedResourceRequest(mappings []corev1.ContainerExtendedReso
 	return false
 }
 
+// TestSlurmBridge_createRequestsAndMappings_clampsWholeNode locks in the fix for
+// the PodGroup gang over-allocation bug: when Slurm allocates a node exclusively
+// (whole-node), its NodeResourceLayout reports the node's ENTIRE GPU pool for the
+// job. The generated ResourceClaim must still request only the GPU count the pod
+// itself asked for, pinned to exactly that many devices.
+func TestSlurmBridge_createRequestsAndMappings_clampsWholeNode(t *testing.T) {
+	ctx := context.Background()
+
+	// Node has 8 GPUs published via the NVIDIA DRA driver.
+	devices := make([]resourcev1.Device, 0, 8)
+	for i := 0; i < 8; i++ {
+		devices = append(devices, resourcev1.Device{Name: "gpu-" + string(rune('0'+i))})
+	}
+	kclient := fake.NewClientBuilder().
+		WithIndex(&resourcev1.ResourceSlice{}, "spec.nodeName", resourceSliceNodeIndex).
+		WithObjects(
+			&corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "node1"}},
+			&resourcev1.DeviceClass{ObjectMeta: metav1.ObjectMeta{Name: nodeinfo.DraDriverGpuNvidia}},
+			&resourcev1.ResourceSlice{
+				ObjectMeta: metav1.ObjectMeta{Name: "node1-gpu"},
+				Spec: resourcev1.ResourceSliceSpec{
+					NodeName: ptr.To("node1"),
+					Driver:   nodeinfo.DraDriverGpuNvidia,
+					Devices:  devices,
+				},
+			},
+		).
+		Build()
+
+	// Pod (a PodGroup gang member) asks for exactly 1 GPU.
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Namespace: metav1.NamespaceDefault, Name: "gang-pod"},
+		Spec: corev1.PodSpec{
+			Containers: []corev1.Container{
+				{
+					Name: "main",
+					Resources: corev1.ResourceRequirements{
+						Requests: corev1.ResourceList{
+							corev1.ResourceName("deviceclass.resource.kubernetes.io/gpu.nvidia.com"): resource.MustParse("1"),
+						},
+						Limits: corev1.ResourceList{
+							corev1.ResourceName("deviceclass.resource.kubernetes.io/gpu.nvidia.com"): resource.MustParse("1"),
+						},
+					},
+				},
+			},
+		},
+	}
+
+	// Slurm reports the WHOLE node (count=8, indices 0-7) — the gang bug input.
+	resources := &slurmcontrol.NodeResources{
+		Node: "node1",
+		Gres: []slurmcontrol.GresLayout{
+			{Name: "gpu", Type: "h100", Count: 8, Index: "0-7"},
+		},
+	}
+
+	sb := &SlurmBridge{
+		Client:     kclient,
+		gpuTypeMap: map[string]string{"h100": nodeinfo.DraDriverGpuNvidia},
+	}
+
+	claim, mappings, _, err := sb.createRequestsAndMappings(ctx, pod, "node1", resources)
+	if err != nil {
+		t.Fatalf("createRequestsAndMappings() error = %v", err)
+	}
+	if claim == nil {
+		t.Fatal("createRequestsAndMappings() claim = nil, want non-nil")
+	}
+	if len(claim.Spec.Devices.Requests) != 1 {
+		t.Fatalf("got %d device requests, want 1", len(claim.Spec.Devices.Requests))
+	}
+	req := claim.Spec.Devices.Requests[0]
+	if req.Exactly == nil {
+		t.Fatal("device request Exactly = nil")
+	}
+	if req.Exactly.Count != 1 {
+		t.Errorf("device request Count = %d, want 1 (pod asked for 1 GPU, not the node's 8)", req.Exactly.Count)
+	}
+	wantExpr := "device.attributes['gpu.nvidia.com'].name in ['gpu-0']"
+	if len(req.Exactly.Selectors) != 1 || req.Exactly.Selectors[0].CEL == nil ||
+		req.Exactly.Selectors[0].CEL.Expression != wantExpr {
+		t.Errorf("device request selector = %+v, want CEL %q", req.Exactly.Selectors, wantExpr)
+	}
+	// Mapping should still be emitted and reference the (clamped) gpu request.
+	if len(mappings) != 1 || mappings[0].RequestName != "gpu" {
+		t.Errorf("mappings = %+v, want one mapping with RequestName=gpu", mappings)
+	}
+}
+
 func TestSlurmBridge_manageResourceClaim_deletesClaimOnError(t *testing.T) {
 	ctx := context.Background()
 	injectedErr := errors.New("injected client error")

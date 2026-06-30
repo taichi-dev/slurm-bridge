@@ -25,3 +25,7 @@ data:
     {{- end }}
     mcsLabel: {{ .Values.schedulerConfig.mcsLabel }}
     partition: {{ .Values.schedulerConfig.partition }}
+    {{- with .Values.schedulerConfig.gpuTypeMap }}
+    gpuTypeMap:
+      {{- toYaml . | nindent 6 }}
+    {{- end }}

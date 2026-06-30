@@ -49,6 +49,7 @@ func TestNodeInfo_GetDeviceRequests(t *testing.T) {
 		nodeName             string
 		resources            *slurmcontrol.NodeResources
 		includeCPUDRARequest bool
+		gpuTypeMap           map[string]string
 		want                 []resourcev1.DeviceRequest
 		wantErr              bool
 		wantErrContains      string
@@ -441,6 +442,120 @@ func TestNodeInfo_GetDeviceRequests(t *testing.T) {
 			},
 		},
 		{
+			// AutoDetect=nvidia names the GRES type by model ("nvidia_b200"),
+			// which gpuTypeMap maps to the gpu.nvidia.com DeviceClass.
+			name: "gpu.nvidia.com via AutoDetect model type",
+			kubeclient: fake.NewClientBuilder().
+				WithIndex(&resourcev1.ResourceSlice{}, "spec.nodeName", resourceSliceNodeIndex).
+				WithObjects(
+					&corev1.Node{
+						ObjectMeta: metav1.ObjectMeta{Name: "node"},
+					},
+					&resourcev1.DeviceClass{
+						ObjectMeta: metav1.ObjectMeta{Name: nodeinfo.DraDriverGpuNvidia},
+					},
+					&resourcev1.ResourceSlice{
+						ObjectMeta: metav1.ObjectMeta{Name: "node-slice"},
+						Spec: resourcev1.ResourceSliceSpec{
+							NodeName: ptr.To("node"),
+							Driver:   nodeinfo.DraDriverGpuNvidia,
+							Devices: []resourcev1.Device{
+								{Name: "gpu-0"},
+								{Name: "gpu-1"},
+							},
+						},
+					},
+				).
+				Build(),
+			nodeName: "node",
+			resources: &slurmcontrol.NodeResources{
+				Node: "node",
+				Gres: []slurmcontrol.GresLayout{
+					{
+						Name:  "gpu",
+						Type:  "nvidia_b200",
+						Count: 2,
+						Index: "0-1",
+					},
+				},
+			},
+			gpuTypeMap: map[string]string{"nvidia_b200": nodeinfo.DraDriverGpuNvidia},
+			want: []resourcev1.DeviceRequest{
+				{
+					Name: "gpu",
+					Exactly: &resourcev1.ExactDeviceRequest{
+						DeviceClassName: nodeinfo.DraDriverGpuNvidia,
+						AllocationMode:  resourcev1.DeviceAllocationModeExactCount,
+						Count:           2,
+						Selectors: []resourcev1.DeviceSelector{
+							{
+								CEL: &resourcev1.CELDeviceSelector{
+									Expression: "device.attributes['gpu.nvidia.com'].name in ['gpu-0','gpu-1']",
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+		{
+			// AutoDetect=nvidia reports the GRES type as a model name ("h100");
+			// gpuTypeMap resolves it to the gpu.nvidia.com DeviceClass, and the
+			// Slurm-reported devices are emitted verbatim into the DeviceRequest.
+			name: "gpu.nvidia.com via AutoDetect model type (gpuTypeMap)",
+			kubeclient: fake.NewClientBuilder().
+				WithIndex(&resourcev1.ResourceSlice{}, "spec.nodeName", resourceSliceNodeIndex).
+				WithObjects(
+					&corev1.Node{
+						ObjectMeta: metav1.ObjectMeta{Name: "node"},
+					},
+					&resourcev1.DeviceClass{
+						ObjectMeta: metav1.ObjectMeta{Name: nodeinfo.DraDriverGpuNvidia},
+					},
+					&resourcev1.ResourceSlice{
+						ObjectMeta: metav1.ObjectMeta{Name: "node-slice"},
+						Spec: resourcev1.ResourceSliceSpec{
+							NodeName: ptr.To("node"),
+							Driver:   nodeinfo.DraDriverGpuNvidia,
+							Devices: []resourcev1.Device{
+								{Name: "gpu-0"}, {Name: "gpu-1"},
+							},
+						},
+					},
+				).
+				Build(),
+			nodeName:   "node",
+			gpuTypeMap: map[string]string{"h100": nodeinfo.DraDriverGpuNvidia},
+			resources: &slurmcontrol.NodeResources{
+				Node: "node",
+				Gres: []slurmcontrol.GresLayout{
+					{
+						Name:  "gpu",
+						Type:  "h100",
+						Count: 2,
+						Index: "0-1",
+					},
+				},
+			},
+			want: []resourcev1.DeviceRequest{
+				{
+					Name: "gpu",
+					Exactly: &resourcev1.ExactDeviceRequest{
+						DeviceClassName: nodeinfo.DraDriverGpuNvidia,
+						AllocationMode:  resourcev1.DeviceAllocationModeExactCount,
+						Count:           2,
+						Selectors: []resourcev1.DeviceSelector{
+							{
+								CEL: &resourcev1.CELDeviceSelector{
+									Expression: "device.attributes['gpu.nvidia.com'].name in ['gpu-0','gpu-1']",
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+		{
 			name: "unknown device class name is skipped",
 			kubeclient: fake.NewClientBuilder().
 				WithIndex(&resourcev1.ResourceSlice{}, "spec.nodeName", resourceSliceNodeIndex).
@@ -563,7 +678,7 @@ func TestNodeInfo_GetDeviceRequests(t *testing.T) {
 			if err != nil {
 				t.Fatalf("could not construct receiver type: %v", err)
 			}
-			got, gotErr := n.GetDeviceRequests(context.Background(), tt.kubeclient, tt.resources, tt.includeCPUDRARequest)
+			got, gotErr := n.GetDeviceRequests(context.Background(), tt.kubeclient, tt.resources, tt.includeCPUDRARequest, tt.gpuTypeMap)
 			if gotErr != nil {
 				if !tt.wantErr {
 					t.Errorf("GetDeviceRequests() failed: %v", gotErr)
@@ -590,6 +705,7 @@ func TestNodeInfo_GetDeviceRequestAllocationResult(t *testing.T) {
 		nodeName             string
 		resources            *slurmcontrol.NodeResources
 		includeCPUDRARequest bool
+		gpuTypeMap           map[string]string
 		want                 []resourcev1.DeviceRequestAllocationResult
 		wantErr              bool
 		wantErrContains      string
@@ -992,6 +1108,52 @@ func TestNodeInfo_GetDeviceRequestAllocationResult(t *testing.T) {
 				Pool:    "pool-numa0",
 			}},
 		},
+		{
+			// AutoDetect=nvidia reports the GRES type as a model name
+			// ("nvidia_b200"); gpuTypeMap resolves it to the gpu.nvidia.com
+			// DeviceClass, and the allocation binds the gpu-<index> devices.
+			name: "gpu.nvidia.com via AutoDetect model type",
+			kubeclient: fake.NewClientBuilder().
+				WithIndex(&resourcev1.ResourceSlice{}, "spec.nodeName", resourceSliceNodeIndex).
+				WithObjects(
+					&corev1.Node{
+						ObjectMeta: metav1.ObjectMeta{Name: "node"},
+					},
+					&resourcev1.DeviceClass{
+						ObjectMeta: metav1.ObjectMeta{Name: nodeinfo.DraDriverGpuNvidia},
+					},
+					&resourcev1.ResourceSlice{
+						ObjectMeta: metav1.ObjectMeta{Name: "node-slice"},
+						Spec: resourcev1.ResourceSliceSpec{
+							NodeName: ptr.To("node"),
+							Pool:     resourcev1.ResourcePool{Name: "node"},
+							Driver:   nodeinfo.DraDriverGpuNvidia,
+							Devices: []resourcev1.Device{
+								{Name: "gpu-0"},
+								{Name: "gpu-1"},
+							},
+						},
+					},
+				).
+				Build(),
+			nodeName: "node",
+			resources: &slurmcontrol.NodeResources{
+				Node: "node",
+				Gres: []slurmcontrol.GresLayout{
+					{
+						Name:  "gpu",
+						Type:  "nvidia_b200",
+						Count: 2,
+						Index: "0-1",
+					},
+				},
+			},
+			gpuTypeMap: map[string]string{"nvidia_b200": nodeinfo.DraDriverGpuNvidia},
+			want: []resourcev1.DeviceRequestAllocationResult{
+				{Request: "gpu", Driver: nodeinfo.DraDriverGpuNvidia, Device: "gpu-0", Pool: "node"},
+				{Request: "gpu", Driver: nodeinfo.DraDriverGpuNvidia, Device: "gpu-1", Pool: "node"},
+			},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -999,7 +1161,7 @@ func TestNodeInfo_GetDeviceRequestAllocationResult(t *testing.T) {
 			if err != nil {
 				t.Fatalf("could not construct receiver type: %v", err)
 			}
-			got, gotErr := n.GetDeviceRequestAllocationResult(context.Background(), tt.kubeclient, tt.resources, tt.includeCPUDRARequest)
+			got, gotErr := n.GetDeviceRequestAllocationResult(context.Background(), tt.kubeclient, tt.resources, tt.includeCPUDRARequest, tt.gpuTypeMap)
 			if gotErr != nil {
 				if !tt.wantErr {
 					t.Errorf("GetDeviceRequestAllocationResult() failed: %v", gotErr)
@@ -1154,6 +1316,46 @@ func TestNodeInfo_GetGresAndGresConf(t *testing.T) {
 			}
 			if gotConf != tt.wantConf {
 				t.Errorf("GetGresAndGresConf() gresConf = %q, want %q", gotConf, tt.wantConf)
+			}
+		})
+	}
+}
+
+func TestResolveDeviceClass(t *testing.T) {
+	tests := []struct {
+		name       string
+		gpuTypeMap map[string]string
+		slurmType  string
+		want       string
+	}{
+		{
+			name:      "nil map returns slurm type unchanged",
+			slurmType: "gpu.nvidia.com",
+			want:      "gpu.nvidia.com",
+		},
+		{
+			name:       "mapped model type resolves to device class",
+			gpuTypeMap: map[string]string{"nvidia_b200": "gpu.nvidia.com"},
+			slurmType:  "nvidia_b200",
+			want:       "gpu.nvidia.com",
+		},
+		{
+			name:       "unmapped type returns unchanged",
+			gpuTypeMap: map[string]string{"nvidia_b200": "gpu.nvidia.com"},
+			slurmType:  "gpu.example.com",
+			want:       "gpu.example.com",
+		},
+		{
+			name:       "empty mapping value is ignored",
+			gpuTypeMap: map[string]string{"nvidia_b200": ""},
+			slurmType:  "nvidia_b200",
+			want:       "nvidia_b200",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := nodeinfo.ResolveDeviceClass(tt.gpuTypeMap, tt.slurmType); got != tt.want {
+				t.Errorf("ResolveDeviceClass() = %q, want %q", got, tt.want)
 			}
 		})
 	}

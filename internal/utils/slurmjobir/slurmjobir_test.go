@@ -338,6 +338,9 @@ func Test_parseGPUDevicePlugin(t *testing.T) {
 			want: ptr.To("gres/gpu=2"),
 		},
 		{
+			// The DeviceClass is intentionally NOT encoded as a Slurm GRES type:
+			// the job requests untyped gres/gpu so it works on clusters that only
+			// track the untyped gres/gpu TRES. See parseGPUDevicePlugin.
 			name: "GPU requested via DRA Extended Resource Claim",
 			args: args{
 				slurmJobIR: &SlurmJobIR{
@@ -348,7 +351,7 @@ func Test_parseGPUDevicePlugin(t *testing.T) {
 					},
 				},
 			},
-			want: ptr.To("gres/gpu:gpu.nvidia.com=1"),
+			want: ptr.To("gres/gpu=1"),
 		},
 		{
 			name: "CPU DRA Extended Resource Claim is ignored for GRES",
@@ -375,7 +378,7 @@ func Test_parseGPUDevicePlugin(t *testing.T) {
 					},
 				},
 			},
-			want: ptr.To("gres/gpu:gpu.nvidia.com=2"),
+			want: ptr.To("gres/gpu=2"),
 		},
 	}
 	for _, tt := range tests {

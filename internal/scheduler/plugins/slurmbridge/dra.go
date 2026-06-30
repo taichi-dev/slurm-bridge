@@ -85,7 +85,7 @@ func (sb *SlurmBridge) createRequestsAndMappings(ctx context.Context, pod *corev
 	}
 
 	podRequestsCPUDRA := podRequestsCPUDRAExtendedResource(pod)
-	allocatedRequests, err := nodeInfo.GetDeviceRequests(ctx, sb.Client, resources, podRequestsCPUDRA)
+	allocatedRequests, err := nodeInfo.GetDeviceRequests(ctx, sb.Client, resources, podRequestsCPUDRA, sb.gpuTypeMap)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -97,12 +97,12 @@ func (sb *SlurmBridge) createRequestsAndMappings(ctx context.Context, pod *corev
 	if resources == nil {
 		return nil, nil, nil, errors.New("expected node resources")
 	}
-	claimResources, err := subsetGRESResources(*resources, deviceClassRequestCounts(pod), deviceClassNames(allocatedRequests))
+	claimResources, err := subsetGRESResources(*resources, deviceClassRequestCounts(pod), deviceClassNames(allocatedRequests), sb.gpuTypeMap)
 	if err != nil {
 		return nil, nil, nil, err
 	}
 
-	deviceRequests, err := nodeInfo.GetDeviceRequests(ctx, sb.Client, claimResources, podRequestsCPUDRA)
+	deviceRequests, err := nodeInfo.GetDeviceRequests(ctx, sb.Client, claimResources, podRequestsCPUDRA, sb.gpuTypeMap)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -160,7 +160,7 @@ func (sb *SlurmBridge) bindClaim(
 	}
 
 	claimIncludesCPUDRARequest := claimRequestsCPUDRA(claim)
-	devices, err := nodeInfo.GetDeviceRequestAllocationResult(ctx, sb.Client, resources, claimIncludesCPUDRARequest)
+	devices, err := nodeInfo.GetDeviceRequestAllocationResult(ctx, sb.Client, resources, claimIncludesCPUDRARequest, sb.gpuTypeMap)
 	if err != nil {
 		return err
 	}
@@ -247,12 +247,18 @@ func deviceClassRequestCounts(pod *corev1.Pod) map[string]int64 {
 	return counts
 }
 
-func subsetGRESResources(resources slurmcontrol.NodeResources, requestedCounts map[string]int64, supportedClasses map[string]struct{}) (*slurmcontrol.NodeResources, error) {
+func subsetGRESResources(resources slurmcontrol.NodeResources, requestedCounts map[string]int64, supportedClasses map[string]struct{}, gpuTypeMap map[string]string) (*slurmcontrol.NodeResources, error) {
 	claimResources := resources
 	claimResources.Gres = nil
 	for _, gres := range resources.Gres {
-		count, requested := requestedCounts[gres.Type]
-		_, supported := supportedClasses[gres.Type]
+		// requestedCounts is keyed by the pod's requested DeviceClass name and
+		// supportedClasses by the generated request's DeviceClass name, both of
+		// which are resolved via gpuTypeMap. Resolve the Slurm GRES type the same
+		// way before matching so a mapped type (e.g. "h100" -> "gpu.nvidia.com")
+		// is not dropped from the clamped claim.
+		className := nodeinfo.ResolveDeviceClass(gpuTypeMap, gres.Type)
+		count, requested := requestedCounts[className]
+		_, supported := supportedClasses[className]
 		if !requested || !supported {
 			continue
 		}

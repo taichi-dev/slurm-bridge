@@ -28,7 +28,23 @@ type NodeInfo struct {
 	GpuMap GPUMap
 }
 
-func (n *NodeInfo) GetDeviceRequests(ctx context.Context, kubeclient client.Client, resources *slurmcontrol.NodeResources, includeCPUDRARequest bool) ([]resourcev1.DeviceRequest, error) {
+// ResolveDeviceClass maps a Slurm GPU GRES type name to a Kubernetes DRA
+// DeviceClass name using the configured gpuTypeMap.
+//
+// With AutoDetect=nvidia, Slurm names GPU GRES by model (e.g. "nvidia_b200"),
+// which does not match the DRA DeviceClass name ("gpu.nvidia.com"). gpuTypeMap
+// lets operators declare that a Slurm GRES type should be treated as a given
+// DeviceClass. When no (non-empty) mapping is configured for slurmType, it is
+// returned unchanged, preserving the default assumption that the Slurm GRES type
+// name equals the DeviceClass name.
+func ResolveDeviceClass(gpuTypeMap map[string]string, slurmType string) string {
+	if deviceClass, ok := gpuTypeMap[slurmType]; ok && deviceClass != "" {
+		return deviceClass
+	}
+	return slurmType
+}
+
+func (n *NodeInfo) GetDeviceRequests(ctx context.Context, kubeclient client.Client, resources *slurmcontrol.NodeResources, includeCPUDRARequest bool, gpuTypeMap map[string]string) ([]resourcev1.DeviceRequest, error) {
 	var requests []resourcev1.DeviceRequest
 
 	if resources == nil {
@@ -72,8 +88,8 @@ func (n *NodeInfo) GetDeviceRequests(ctx context.Context, kubeclient client.Clie
 	}
 
 	for _, gres := range resources.Gres {
-		deviceClassName := gres.Type
-		exists, err := deviceClassExists(ctx, kubeclient, gres.Type)
+		deviceClassName := ResolveDeviceClass(gpuTypeMap, gres.Type)
+		exists, err := deviceClassExists(ctx, kubeclient, deviceClassName)
 		if err != nil {
 			return nil, err
 		}
@@ -127,7 +143,7 @@ func (n *NodeInfo) GetDeviceRequests(ctx context.Context, kubeclient client.Clie
 	return requests, nil
 }
 
-func (n *NodeInfo) GetDeviceRequestAllocationResult(ctx context.Context, kubeclient client.Client, resources *slurmcontrol.NodeResources, includeCPUDRARequest bool) ([]resourcev1.DeviceRequestAllocationResult, error) {
+func (n *NodeInfo) GetDeviceRequestAllocationResult(ctx context.Context, kubeclient client.Client, resources *slurmcontrol.NodeResources, includeCPUDRARequest bool, gpuTypeMap map[string]string) ([]resourcev1.DeviceRequestAllocationResult, error) {
 	var devices []resourcev1.DeviceRequestAllocationResult
 
 	if resources == nil {
@@ -166,8 +182,8 @@ func (n *NodeInfo) GetDeviceRequestAllocationResult(ctx context.Context, kubecli
 	}
 
 	for _, gres := range resources.Gres {
-		deviceClassName := gres.Type
-		exists, err := deviceClassExists(ctx, kubeclient, gres.Type)
+		deviceClassName := ResolveDeviceClass(gpuTypeMap, gres.Type)
+		exists, err := deviceClassExists(ctx, kubeclient, deviceClassName)
 		if err != nil {
 			return nil, err
 		}
