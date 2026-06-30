@@ -153,17 +153,21 @@ func parseGPUDevicePlugin(slurmJobIR *SlurmJobIR) {
 	for _, p := range slurmJobIR.Pods.Items {
 		lim := resourcehelper.PodLimits(&p, resourcehelper.PodResourcesOptions{})
 		for resourceName, quantity := range lim {
-			if resourceName == nvidiaDevicePlugin || resourceName == amdDevicePlugin {
+			isDevicePlugin := resourceName == nvidiaDevicePlugin || resourceName == amdDevicePlugin
+			isDRADeviceClass := strings.HasPrefix(resourceName.String(), resourcev1.ResourceDeviceClassPrefix)
+			// Both the device-plugin path (nvidia.com/gpu, amd.com/gpu) and the DRA
+			// extended-resource path (deviceclass.resource.kubernetes.io/<class>)
+			// request an untyped `gres/gpu=N`. We deliberately do NOT encode the GPU
+			// model or DeviceClass as a Slurm GRES type: many clusters track only the
+			// untyped `gres/gpu` TRES in AccountingStorageTRES, so a typed request
+			// (e.g. `gres/gpu:h100=1`) is rejected by slurmctld with "Requested node
+			// configuration is not available". Mapping the DeviceClass to a specific
+			// physical GPU is handled on the reverse path (ResourceClaim allocation,
+			// which uses gpuTypeMap), not at job submission.
+			if isDevicePlugin || isDRADeviceClass {
 				if quantity.Cmp(gresMax) > 0 {
 					gresMax = quantity
 					gres = fmt.Sprintf("gres/gpu=%s", quantity.String())
-				}
-			}
-			if strings.HasPrefix(resourceName.String(), resourcev1.ResourceDeviceClassPrefix) {
-				if quantity.Cmp(gresMax) > 0 {
-					deviceClass := strings.TrimPrefix(string(resourceName), resourcev1.ResourceDeviceClassPrefix)
-					gres = fmt.Sprintf("gres/gpu:%s=%s", deviceClass, quantity.String())
-					gresMax = quantity
 				}
 			}
 		}

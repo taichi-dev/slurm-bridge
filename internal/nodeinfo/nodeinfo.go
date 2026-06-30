@@ -28,7 +28,81 @@ type NodeInfo struct {
 	GpuMap GPUMap
 }
 
-func (n *NodeInfo) GetDeviceRequests(ctx context.Context, kubeclient client.Client, resources *slurmcontrol.NodeResources) ([]resourcev1.DeviceRequest, error) {
+// ResolveDeviceClass maps a Slurm GPU GRES type name to a Kubernetes DRA
+// DeviceClass name using the configured gpuTypeMap.
+//
+// With AutoDetect=nvidia, Slurm names GPU GRES by model (e.g. "nvidia_b200"),
+// which does not match the DRA DeviceClass name ("gpu.nvidia.com"). gpuTypeMap
+// lets operators declare that a Slurm GRES type should be treated as a given
+// DeviceClass. When no (non-empty) mapping is configured for slurmType, it is
+// returned unchanged, preserving the default assumption that the Slurm GRES type
+// name equals the DeviceClass name.
+func ResolveDeviceClass(gpuTypeMap map[string]string, slurmType string) string {
+	if deviceClass, ok := gpuTypeMap[slurmType]; ok && deviceClass != "" {
+		return deviceClass
+	}
+	return slurmType
+}
+
+// PodDeviceClassRequest returns the number of devices the pod itself requests
+// for the given DRA DeviceClass, considering both the DRA extended-resource
+// form ("deviceclass.resource.kubernetes.io/<class>") and the legacy device-
+// plugin form ("nvidia.com/gpu", "amd.com/gpu"). The count is the max across
+// containers (init and regular), matching how the forward path derives the
+// Slurm gres request in slurmjobir.parseGPUDevicePlugin.
+//
+// This is the pod's *intent*. It is needed to clamp the per-pod ResourceClaim:
+// when Slurm allocates a node exclusively (whole-node), its NodeResourceLayout
+// reports the node's entire GPU pool for the job, not the slice this pod meant
+// to use. Without clamping, a pod that asked for 1 GPU would be handed all of
+// the node's GPUs. Returns (0, false) when the pod requests nothing for the
+// DeviceClass.
+func PodDeviceClassRequest(pod *corev1.Pod, deviceClassName string) (int64, bool) {
+	if pod == nil || deviceClassName == "" {
+		return 0, false
+	}
+	draResourceName := resourcev1.ResourceDeviceClassPrefix + deviceClassName
+
+	var max int64
+	found := false
+	containers := make([]corev1.Container, 0, len(pod.Spec.InitContainers)+len(pod.Spec.Containers))
+	containers = append(containers, pod.Spec.InitContainers...)
+	containers = append(containers, pod.Spec.Containers...)
+	for _, c := range containers {
+		for rName, quantity := range c.Resources.Requests {
+			name := rName.String()
+			isDevicePlugin := name == DevicePluginNvidia || name == DevicePluginAmd
+			isThisDeviceClass := name == draResourceName
+			if !isDevicePlugin && !isThisDeviceClass {
+				continue
+			}
+			if v := quantity.Value(); v > max {
+				max = v
+			}
+			found = true
+		}
+	}
+	return max, found
+}
+
+// clampDeviceList trims the Slurm-reported device indices and count to what the
+// pod actually requested for the DeviceClass. When the pod requests fewer
+// devices than Slurm reports allocated (the whole-node/exclusive case), only
+// the first podRequest indices are kept so the generated ResourceClaim pins to
+// the right number of devices. When the pod requests at least as many as Slurm
+// reports (the normal shared case), the Slurm-reported list is returned
+// unchanged.
+func clampDeviceList(indexList []string, podRequest int64, podHasRequest bool) []string {
+	if !podHasRequest || podRequest <= 0 {
+		return indexList
+	}
+	if int64(len(indexList)) <= podRequest {
+		return indexList
+	}
+	return indexList[:podRequest]
+}
+
+func (n *NodeInfo) GetDeviceRequests(ctx context.Context, kubeclient client.Client, pod *corev1.Pod, resources *slurmcontrol.NodeResources, gpuTypeMap map[string]string) ([]resourcev1.DeviceRequest, error) {
 	var requests []resourcev1.DeviceRequest
 
 	if resources == nil {
@@ -61,14 +135,21 @@ func (n *NodeInfo) GetDeviceRequests(ctx context.Context, kubeclient client.Clie
 	}
 
 	for _, gres := range resources.Gres {
-		deviceClassName := gres.Type
-		if !hasDeviceClass(ctx, kubeclient, gres.Type) {
+		deviceClassName := ResolveDeviceClass(gpuTypeMap, gres.Type)
+		if !hasDeviceClass(ctx, kubeclient, deviceClassName) {
 			continue
 		}
 		indexList, err := hostlist.Expand(fmt.Sprintf("[%s]", gres.Index))
 		if err != nil {
 			return nil, err
 		}
+		// Clamp the Slurm-reported device list to what this pod actually
+		// requested. On a whole-node/exclusive Slurm allocation, the layout
+		// reports the node's entire GPU pool, which would otherwise pin the
+		// claim to every device on the node (and request that many).
+		podRequest, podHasRequest := PodDeviceClassRequest(pod, deviceClassName)
+		indexList = clampDeviceList(indexList, podRequest, podHasRequest)
+		count := int64(len(indexList))
 		var celExpr string
 		switch deviceClassName {
 		case DraDriverGpuNvidia:
@@ -90,7 +171,7 @@ func (n *NodeInfo) GetDeviceRequests(ctx context.Context, kubeclient client.Clie
 			Exactly: &resourcev1.ExactDeviceRequest{
 				DeviceClassName: deviceClassName,
 				AllocationMode:  resourcev1.DeviceAllocationModeExactCount,
-				Count:           gres.Count,
+				Count:           count,
 				Selectors: []resourcev1.DeviceSelector{
 					{
 						CEL: &resourcev1.CELDeviceSelector{
@@ -106,7 +187,7 @@ func (n *NodeInfo) GetDeviceRequests(ctx context.Context, kubeclient client.Clie
 	return requests, nil
 }
 
-func (n *NodeInfo) GetDeviceRequestAllocationResult(ctx context.Context, kubeclient client.Client, resources *slurmcontrol.NodeResources) ([]resourcev1.DeviceRequestAllocationResult, error) {
+func (n *NodeInfo) GetDeviceRequestAllocationResult(ctx context.Context, kubeclient client.Client, pod *corev1.Pod, resources *slurmcontrol.NodeResources, gpuTypeMap map[string]string) ([]resourcev1.DeviceRequestAllocationResult, error) {
 	var devices []resourcev1.DeviceRequestAllocationResult
 
 	if resources == nil {
@@ -136,14 +217,19 @@ func (n *NodeInfo) GetDeviceRequestAllocationResult(ctx context.Context, kubecli
 	}
 
 	for _, gres := range resources.Gres {
-		deviceClassName := gres.Type
-		if !hasDeviceClass(ctx, kubeclient, gres.Type) {
+		deviceClassName := ResolveDeviceClass(gpuTypeMap, gres.Type)
+		if !hasDeviceClass(ctx, kubeclient, deviceClassName) {
 			continue
 		}
 		indexList, err := hostlist.Expand(fmt.Sprintf("[%s]", gres.Index))
 		if err != nil {
 			return nil, err
 		}
+		// Clamp to the pod's own request so the allocation result enumerates
+		// exactly the devices the (clamped) DeviceRequest pins to. See
+		// GetDeviceRequests for the whole-node/exclusive rationale.
+		podRequest, podHasRequest := PodDeviceClassRequest(pod, deviceClassName)
+		indexList = clampDeviceList(indexList, podRequest, podHasRequest)
 		for _, i := range indexList {
 			index, err := strconv.Atoi(i)
 			if err != nil {

@@ -91,7 +91,7 @@ func (sb *SlurmBridge) createRequestsAndMappings(ctx context.Context, pod *corev
 		return nil, nil, err
 	}
 
-	deviceRequests, err := nodeInfo.GetDeviceRequests(ctx, sb.Client, resources, sb.gpuTypeMap)
+	deviceRequests, err := nodeInfo.GetDeviceRequests(ctx, sb.Client, pod, resources, sb.gpuTypeMap)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -182,7 +182,7 @@ func (sb *SlurmBridge) bindClaim(
 		return err
 	}
 
-	devices, err := nodeInfo.GetDeviceRequestAllocationResult(ctx, sb.Client, resources, sb.gpuTypeMap)
+	devices, err := nodeInfo.GetDeviceRequestAllocationResult(ctx, sb.Client, pod, resources, sb.gpuTypeMap)
 	if err != nil {
 		return err
 	}

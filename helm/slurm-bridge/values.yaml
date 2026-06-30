@@ -54,6 +54,13 @@ schedulerConfig:
   # -- Set the default Slurm partition to use for external jobs.
   # Ref: https://slurm.schedmd.com/sbatch.html#OPT_partition
   partition: slurm-bridge
+  # -- (map[string]string) Map a Slurm GPU GRES type name to a Kubernetes DRA
+  # DeviceClass name. Needed when slurmd runs with `AutoDetect=nvidia`, which
+  # names GPU GRES by model (e.g. `nvidia_b200`) instead of by DeviceClass
+  # (`gpu.nvidia.com`). Entries with an empty value are ignored. Example:
+  #   gpuTypeMap:
+  #     nvidia_b200: gpu.nvidia.com
+  gpuTypeMap: {}
 
 # Configuration settings for the admission controller.
 admission:

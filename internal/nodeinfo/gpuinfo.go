@@ -28,6 +28,15 @@ const (
 	DraDriverGpuNvidia = "gpu.nvidia.com"
 )
 
+// Legacy (non-DRA) device-plugin resource names. A pod may request a GPU via
+// these instead of a DRA DeviceClass extended resource; PodDeviceClassRequest
+// treats them as a request against whichever DeviceClass the node's GRES
+// resolves to.
+const (
+	DevicePluginNvidia = "nvidia.com/gpu"
+	DevicePluginAmd    = "amd.com/gpu"
+)
+
 // Resource attributes. DraExampleDriver uses "index" in Device.Attributes.
 // DraDriverGpuNvidia uses Name "gpu-<minor>", (e.g. "gpu-0", "gpu-1" from
 // CanonicalName in NVIDIA k8s-dra-driver-gpu).

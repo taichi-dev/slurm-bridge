@@ -66,6 +66,11 @@ type SlurmBridge struct {
 	schedulerName string
 	slurmControl  slurmcontrol.SlurmControlInterface
 	handle        fwk.Handle
+	// gpuTypeMap maps a Slurm GPU GRES type name (e.g. "nvidia_b200" from
+	// AutoDetect=nvidia) to a Kubernetes DRA DeviceClass name (e.g.
+	// "gpu.nvidia.com"). Empty entries fall back to using the GRES type as the
+	// DeviceClass name. See config.Config.GpuTypeMap.
+	gpuTypeMap map[string]string
 }
 
 var _ fwk.PreEnqueuePlugin = &SlurmBridge{}
@@ -144,6 +149,7 @@ func New(ctx context.Context, obj runtime.Object, handle fwk.Handle) (fwk.Plugin
 		schedulerName: cfg.SchedulerName,
 		slurmControl:  sc,
 		handle:        handle,
+		gpuTypeMap:    cfg.GpuTypeMap,
 	}
 	return plugin, nil
 }
@@ -381,8 +387,11 @@ func (sb *SlurmBridge) PreBindPreFlight(ctx context.Context, cs fwk.CycleState, 
 func (sb *SlurmBridge) PreBind(ctx context.Context, state fwk.CycleState, pod *corev1.Pod, nodeName string) *fwk.Status {
 
 	// Note that whole node allocations in slurm will look like all
-	// resources were requested, but that doesn't mean the pod
-	// intended to use them.
+	// resources were requested, but that doesn't mean the pod intended to
+	// use them. manageResourceClaim clamps each pod's generated
+	// ResourceClaim to the GPU count the pod itself requested (see
+	// nodeinfo.PodDeviceClassRequest / clampDeviceList), so a whole-node
+	// Slurm allocation does not hand the pod every GPU on the node.
 	resources, err := sb.slurmControl.GetResources(ctx, pod, nodeName)
 	if err != nil {
 		return fwk.NewStatus(fwk.Error, err.Error())
