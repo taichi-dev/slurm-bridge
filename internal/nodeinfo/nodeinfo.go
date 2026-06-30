@@ -15,6 +15,7 @@ import (
 	resourcev1 "k8s.io/api/resource/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
+	resourcehelper "k8s.io/component-helpers/resource"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -47,9 +48,14 @@ func ResolveDeviceClass(gpuTypeMap map[string]string, slurmType string) string {
 // PodDeviceClassRequest returns the number of devices the pod itself requests
 // for the given DRA DeviceClass, considering both the DRA extended-resource
 // form ("deviceclass.resource.kubernetes.io/<class>") and the legacy device-
-// plugin form ("nvidia.com/gpu", "amd.com/gpu"). The count is the max across
-// containers (init and regular), matching how the forward path derives the
-// Slurm gres request in slurmjobir.parseGPUDevicePlugin.
+// plugin form ("nvidia.com/gpu", "amd.com/gpu").
+//
+// The count uses the SAME pod-level aggregation the forward path applies to
+// derive the Slurm gres request: slurmjobir.parseGPUDevicePlugin also calls
+// resourcehelper.PodLimits, which sums GPU requests across regular containers
+// (and maxes them with init containers). This keeps the clamp count equal to
+// the gres/gpu=N Slurm allocated; a naive per-container max would undercount a
+// pod that splits its GPUs across multiple containers.
 //
 // This is the pod's *intent*. It is needed to clamp the per-pod ResourceClaim:
 // when Slurm allocates a node exclusively (whole-node), its NodeResourceLayout
@@ -63,24 +69,20 @@ func PodDeviceClassRequest(pod *corev1.Pod, deviceClassName string) (int64, bool
 	}
 	draResourceName := resourcev1.ResourceDeviceClassPrefix + deviceClassName
 
+	lim := resourcehelper.PodLimits(pod, resourcehelper.PodResourcesOptions{})
 	var max int64
 	found := false
-	containers := make([]corev1.Container, 0, len(pod.Spec.InitContainers)+len(pod.Spec.Containers))
-	containers = append(containers, pod.Spec.InitContainers...)
-	containers = append(containers, pod.Spec.Containers...)
-	for _, c := range containers {
-		for rName, quantity := range c.Resources.Requests {
-			name := rName.String()
-			isDevicePlugin := name == DevicePluginNvidia || name == DevicePluginAmd
-			isThisDeviceClass := name == draResourceName
-			if !isDevicePlugin && !isThisDeviceClass {
-				continue
-			}
-			if v := quantity.Value(); v > max {
-				max = v
-			}
-			found = true
+	for rName, quantity := range lim {
+		name := rName.String()
+		isDevicePlugin := name == DevicePluginNvidia || name == DevicePluginAmd
+		isThisDeviceClass := name == draResourceName
+		if !isDevicePlugin && !isThisDeviceClass {
+			continue
 		}
+		if v := quantity.Value(); v > max {
+			max = v
+		}
+		found = true
 	}
 	return max, found
 }

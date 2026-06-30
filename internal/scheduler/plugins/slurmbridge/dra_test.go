@@ -486,6 +486,106 @@ func TestSlurmBridge_createRequestsAndMappings_clampsWholeNode(t *testing.T) {
 	}
 }
 
+// TestSlurmBridge_createRequestsAndMappings_multiPodDistinctNodes models a
+// multi-pod gang (PodGroup/LWS) where the pods share one Slurm job but land on
+// distinct nodes (every translator pins TasksPerNode=1). Slurm reports the WHOLE
+// node to each pod, and the pods request different GPU counts. Each pod's claim
+// must be clamped independently to that pod's own request against its own node —
+// proving co-scheduled gang members never collide on or over-claim GPUs.
+func TestSlurmBridge_createRequestsAndMappings_multiPodDistinctNodes(t *testing.T) {
+	ctx := context.Background()
+
+	gpuSlice := func(node string) *resourcev1.ResourceSlice {
+		devices := make([]resourcev1.Device, 0, 8)
+		for i := 0; i < 8; i++ {
+			devices = append(devices, resourcev1.Device{Name: "gpu-" + string(rune('0'+i))})
+		}
+		return &resourcev1.ResourceSlice{
+			ObjectMeta: metav1.ObjectMeta{Name: node + "-gpu"},
+			Spec: resourcev1.ResourceSliceSpec{
+				NodeName: ptr.To(node),
+				Driver:   nodeinfo.DraDriverGpuNvidia,
+				Devices:  devices,
+			},
+		}
+	}
+	kclient := fake.NewClientBuilder().
+		WithIndex(&resourcev1.ResourceSlice{}, "spec.nodeName", resourceSliceNodeIndex).
+		WithObjects(
+			&corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "node1"}},
+			&corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "node2"}},
+			&resourcev1.DeviceClass{ObjectMeta: metav1.ObjectMeta{Name: nodeinfo.DraDriverGpuNvidia}},
+			gpuSlice("node1"),
+			gpuSlice("node2"),
+		).
+		Build()
+
+	gangPod := func(name string, gpus int64) *corev1.Pod {
+		q := resource.NewQuantity(gpus, resource.DecimalSI)
+		dc := corev1.ResourceName(resourcev1.ResourceDeviceClassPrefix + nodeinfo.DraDriverGpuNvidia)
+		return &corev1.Pod{
+			// Same external job id: these are members of one Slurm gang job.
+			ObjectMeta: metav1.ObjectMeta{
+				Namespace: metav1.NamespaceDefault,
+				Name:      name,
+				Labels:    map[string]string{"slinky.slurm.net/slurm-jobid": "42"},
+			},
+			Spec: corev1.PodSpec{
+				Containers: []corev1.Container{{
+					Name: "main",
+					Resources: corev1.ResourceRequirements{
+						Requests: corev1.ResourceList{dc: *q},
+						Limits:   corev1.ResourceList{dc: *q},
+					},
+				}},
+			},
+		}
+	}
+
+	// Slurm reports the whole node (8 GPUs) for the gang job on each node.
+	wholeNode := func(node string) *slurmcontrol.NodeResources {
+		return &slurmcontrol.NodeResources{
+			Node: node,
+			Gres: []slurmcontrol.GresLayout{{Name: "gpu", Type: "h100", Count: 8, Index: "0-7"}},
+		}
+	}
+
+	sb := &SlurmBridge{
+		Client:     kclient,
+		gpuTypeMap: map[string]string{"h100": nodeinfo.DraDriverGpuNvidia},
+	}
+
+	cases := []struct {
+		pod      *corev1.Pod
+		node     string
+		wantCnt  int64
+		wantExpr string
+	}{
+		{gangPod("gang-a", 2), "node1", 2, "device.attributes['gpu.nvidia.com'].name in ['gpu-0','gpu-1']"},
+		{gangPod("gang-b", 3), "node2", 3, "device.attributes['gpu.nvidia.com'].name in ['gpu-0','gpu-1','gpu-2']"},
+	}
+	for _, c := range cases {
+		claim, mappings, err := sb.createRequestsAndMappings(ctx, c.pod, c.node, wholeNode(c.node))
+		if err != nil {
+			t.Fatalf("%s: createRequestsAndMappings() error = %v", c.pod.Name, err)
+		}
+		if claim == nil || len(claim.Spec.Devices.Requests) != 1 {
+			t.Fatalf("%s: want exactly one device request, got claim=%v", c.pod.Name, claim)
+		}
+		req := claim.Spec.Devices.Requests[0]
+		if req.Exactly == nil || req.Exactly.Count != c.wantCnt {
+			t.Errorf("%s: device request Count = %v, want %d (pod's own request, not the node's 8)", c.pod.Name, req.Exactly, c.wantCnt)
+		}
+		if len(req.Exactly.Selectors) != 1 || req.Exactly.Selectors[0].CEL == nil ||
+			req.Exactly.Selectors[0].CEL.Expression != c.wantExpr {
+			t.Errorf("%s: selector = %+v, want CEL %q", c.pod.Name, req.Exactly.Selectors, c.wantExpr)
+		}
+		if len(mappings) != 1 || mappings[0].RequestName != "gpu" {
+			t.Errorf("%s: mappings = %+v, want one mapping with RequestName=gpu", c.pod.Name, mappings)
+		}
+	}
+}
+
 func TestSlurmBridge_manageResourceClaim_deletesClaimOnError(t *testing.T) {
 	ctx := context.Background()
 	injectedErr := errors.New("injected client error")

@@ -1091,9 +1091,32 @@ func TestPodDeviceClassRequest(t *testing.T) {
 						Name: "main",
 						Resources: corev1.ResourceRequirements{
 							Requests: corev1.ResourceList{corev1.ResourceName(name): *q},
+							Limits:   corev1.ResourceList{corev1.ResourceName(name): *q},
 						},
 					},
 				},
+			},
+		}
+	}
+
+	// A pod that splits GPUs across two regular containers: the pod-level
+	// request is the SUM (2), which must match the gres/gpu=2 the forward path
+	// (slurmjobir.parseGPUDevicePlugin) asks Slurm for. A per-container max
+	// would wrongly report 1 and under-clamp the claim.
+	multiContainer := func(name string, perContainer int64) *corev1.Pod {
+		q := resource.NewQuantity(perContainer, resource.DecimalSI)
+		mk := func(cName string) corev1.Container {
+			return corev1.Container{
+				Name: cName,
+				Resources: corev1.ResourceRequirements{
+					Requests: corev1.ResourceList{corev1.ResourceName(name): *q},
+					Limits:   corev1.ResourceList{corev1.ResourceName(name): *q},
+				},
+			}
+		}
+		return &corev1.Pod{
+			Spec: corev1.PodSpec{
+				Containers: []corev1.Container{mk("a"), mk("b")},
 			},
 		}
 	}
@@ -1127,6 +1150,20 @@ func TestPodDeviceClassRequest(t *testing.T) {
 		{
 			name:            "nvidia device-plugin request maps to the resolved device class",
 			pod:             withDevicePlugin(nodeinfo.DevicePluginNvidia, 2),
+			deviceClassName: nodeinfo.DraDriverGpuNvidia,
+			wantCount:       2,
+			wantFound:       true,
+		},
+		{
+			name:            "device-plugin GPUs split across containers sum to the pod total",
+			pod:             multiContainer(nodeinfo.DevicePluginNvidia, 1),
+			deviceClassName: nodeinfo.DraDriverGpuNvidia,
+			wantCount:       2,
+			wantFound:       true,
+		},
+		{
+			name:            "DRA extended-resource GPUs split across containers sum to the pod total",
+			pod:             multiContainer(resourcev1.ResourceDeviceClassPrefix+nodeinfo.DraDriverGpuNvidia, 1),
 			deviceClassName: nodeinfo.DraDriverGpuNvidia,
 			wantCount:       2,
 			wantFound:       true,
