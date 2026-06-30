@@ -60,6 +60,7 @@ Kubernetes: `>= 1.34.0-0`
 | scheduler.resources | object | `{}` | Set container resource requests and limits for Kubernetes Pod scheduling. Ref: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/#resource-requests-and-limits-of-pod-and-container |
 | scheduler.tolerations | list | `[]` | Configure pod tolerations. Ref: https://kubernetes.io/docs/concepts/scheduling-eviction/taint-and-toleration/ |
 | scheduler.verbosity | integer | `nil` | Set the verbosity level of the scheduler. |
+| schedulerConfig.gpuTypeMap | map[string]string | `{}` | Map a Slurm GPU GRES type name to a Kubernetes DRA DeviceClass name. Needed when slurmd runs with `AutoDetect=nvidia`, which names GPU GRES by model (e.g. `nvidia_b200`) instead of by DeviceClass (`gpu.nvidia.com`). Entries with an empty value are ignored. Example:   gpuTypeMap:     nvidia_b200: gpu.nvidia.com |
 | schedulerConfig.mcsLabel | string | `"kubernetes"` | Set the Slurm MCS Label to use for external jobs. Ref: https://slurm.schedmd.com/sbatch.html#OPT_mcs-label |
 | schedulerConfig.partition | string | `"slurm-bridge"` | Set the default Slurm partition to use for external jobs. Ref: https://slurm.schedmd.com/sbatch.html#OPT_partition |
 | schedulerConfig.schedulerName | string | `"slurm-bridge-scheduler"` | Set the name of the scheduler. |

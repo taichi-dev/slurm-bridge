@@ -132,6 +132,11 @@ type SlurmBridge struct {
 	schedulerName string
 	slurmControl  slurmcontrol.SlurmControlInterface
 	handle        fwk.Handle
+	// gpuTypeMap maps a Slurm GPU GRES type name (e.g. "nvidia_b200" from
+	// AutoDetect=nvidia) to a Kubernetes DRA DeviceClass name (e.g.
+	// "gpu.nvidia.com"). Empty entries fall back to using the GRES type as the
+	// DeviceClass name. See config.Config.GpuTypeMap.
+	gpuTypeMap map[string]string
 }
 
 var _ fwk.PreEnqueuePlugin = &SlurmBridge{}
@@ -215,6 +220,7 @@ func New(ctx context.Context, obj runtime.Object, handle fwk.Handle) (fwk.Plugin
 		schedulerName: cfg.SchedulerName,
 		slurmControl:  sc,
 		handle:        handle,
+		gpuTypeMap:    cfg.GpuTypeMap,
 	}
 	return plugin, nil
 }

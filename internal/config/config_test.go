@@ -81,6 +81,23 @@ func TestUnmarshal(t *testing.T) {
 			wantErr: false,
 		},
 		{
+			name: "Test gpuTypeMap",
+			args: args{
+				in: []byte(`
+gpuTypeMap:
+  nvidia_b200: gpu.nvidia.com
+  h100: gpu.nvidia.com
+`),
+			},
+			want: &Config{
+				GpuTypeMap: map[string]string{
+					"nvidia_b200": "gpu.nvidia.com",
+					"h100":        "gpu.nvidia.com",
+				},
+			},
+			wantErr: false,
+		},
+		{
 			name: "Test managedNamespaceSelector",
 			args: args{
 				in: []byte(`
