@@ -6,6 +6,7 @@ package pod
 import (
 	"context"
 	"strconv"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -101,6 +102,29 @@ func newTerminatingPod(name string, jobId int32) *corev1.Pod {
 func newTerminalPod(name string, jobId int32) *corev1.Pod {
 	pod := newPod(name, jobId)
 	pod.Status.Phase = corev1.PodSucceeded
+	return pod
+}
+
+// newStuckTerminatingPod returns a pod deleted before its containers ever
+// started, whose deletion grace period has long since expired. kubelet leaves
+// such a pod at Pending forever, so it never becomes IsPodTerminal.
+func newStuckTerminatingPod(name string, jobId int32) *corev1.Pod {
+	pod := newPod(name, jobId)
+	pod.Status.Phase = corev1.PodPending
+	pod.Status.Conditions = nil
+	deleted := metav1.NewTime(time.Now().Add(-time.Hour))
+	pod.DeletionTimestamp = &deleted
+	pod.DeletionGracePeriodSeconds = ptr.To[int64](300)
+	pod.Finalizers = []string{wellknown.FinalizerScheduler}
+	return pod
+}
+
+// newRecentlyTerminatingPod returns a pod deleted moments ago, still within its
+// grace period, that has not reached a terminal phase.
+func newRecentlyTerminatingPod(name string, jobId int32) *corev1.Pod {
+	pod := newStuckTerminatingPod(name, jobId)
+	deleted := metav1.Now()
+	pod.DeletionTimestamp = &deleted
 	return pod
 }
 
@@ -704,6 +728,152 @@ var _ = Describe("prepareTerminalPod()", func() {
 			gotClaim := &resourcev1.ResourceClaim{}
 			err = localController.Get(ctx, claimKey, gotClaim)
 			Expect(err).NotTo(HaveOccurred())
+		})
+	})
+})
+
+var _ = Describe("isCleanable()", func() {
+	It("Should be true for a pod in a terminal phase", func() {
+		Expect(isCleanable(newTerminalPod("foo", 1))).To(BeTrue())
+	})
+
+	It("Should be false for a live pod", func() {
+		Expect(isCleanable(newPod("foo", 1))).To(BeFalse())
+	})
+
+	It("Should be false while the deletion grace period has not expired", func() {
+		Expect(isCleanable(newRecentlyTerminatingPod("foo", 1))).To(BeFalse())
+	})
+
+	It("Should be true once the deletion grace period has expired", func() {
+		Expect(isCleanable(newStuckTerminatingPod("foo", 1))).To(BeTrue())
+	})
+
+	It("Should respect a grace period longer than the elapsed time", func() {
+		pod := newStuckTerminatingPod("foo", 1)
+		pod.DeletionGracePeriodSeconds = ptr.To[int64](7200)
+		Expect(isCleanable(pod)).To(BeFalse())
+	})
+
+	It("Should fall back to the spec grace period", func() {
+		pod := newStuckTerminatingPod("foo", 1)
+		pod.DeletionGracePeriodSeconds = nil
+		pod.Spec.TerminationGracePeriodSeconds = ptr.To[int64](7200)
+		Expect(isCleanable(pod)).To(BeFalse())
+	})
+})
+
+// A pod deleted before its containers ever started stays at Pending forever.
+// Gating cleanup on IsPodTerminal alone deadlocks: the placeholder job is never
+// terminated so it keeps holding its allocation, and the finalizer is never
+// removed so the pod object never goes away.
+var _ = Describe("Cleanup of pods deleted before reaching a terminal phase", func() {
+	podName := "stuck"
+	var jobId int32 = 1
+
+	newControllerWith := func(pods ...corev1.Pod) *PodReconciler {
+		jobList := &slurmtypes.V0044JobInfoList{
+			Items: []slurmtypes.V0044JobInfo{
+				{
+					V0044JobInfo: api.V0044JobInfo{
+						JobId:        ptr.To(jobId),
+						JobState:     &[]api.V0044JobInfoJobState{api.V0044JobInfoJobStateRUNNING},
+						AdminComment: ptr.To(newExternalJobInfo(podName).ToString()),
+					},
+				},
+			},
+		}
+		c := slurmclientfake.NewClientBuilder().WithLists(jobList).Build()
+		return &PodReconciler{
+			Client:        fake.NewFakeClient(&corev1.PodList{Items: pods}),
+			Scheme:        scheme.Scheme,
+			SlurmClient:   c,
+			EventCh:       make(chan event.GenericEvent, 5),
+			slurmControl:  slurmcontrol.NewControl(c),
+			eventRecorder: record.NewFakeRecorder(10),
+		}
+	}
+
+	jobRunning := func(controller *PodReconciler) bool {
+		probe := newPod(podName, jobId)
+		exists, err := controller.slurmControl.IsJobRunning(ctx, probe)
+		Expect(err).NotTo(HaveOccurred())
+		return exists
+	}
+
+	getPod := func(controller *PodReconciler, name string) *corev1.Pod {
+		pod := &corev1.Pod{}
+		err := controller.Get(ctx, types.NamespacedName{
+			Namespace: metav1.NamespaceDefault, Name: name,
+		}, pod)
+		Expect(err).NotTo(HaveOccurred())
+		return pod
+	}
+
+	Context("syncSlurm()", func() {
+		It("Should terminate the placeholder job once the grace period expires", func() {
+			controller := newControllerWith(*newStuckTerminatingPod(podName, jobId))
+			Expect(jobRunning(controller)).To(BeTrue())
+
+			By("Reconciling")
+			Expect(controller.syncSlurm(ctx, newRequest(podName))).To(Succeed())
+
+			By("Check job is no longer running")
+			Expect(jobRunning(controller)).To(BeFalse())
+		})
+
+		It("Should retain the job while the pod is still within its grace period", func() {
+			controller := newControllerWith(*newRecentlyTerminatingPod(podName, jobId))
+
+			By("Reconciling")
+			Expect(controller.syncSlurm(ctx, newRequest(podName))).To(Succeed())
+
+			By("Check job is still running")
+			Expect(jobRunning(controller)).To(BeTrue())
+		})
+
+		It("Should retain the job while another pod of the same job is still live", func() {
+			controller := newControllerWith(
+				*newStuckTerminatingPod(podName, jobId),
+				*newPod("live", jobId),
+			)
+
+			By("Reconciling")
+			Expect(controller.syncSlurm(ctx, newRequest(podName))).To(Succeed())
+
+			By("Check job is still running")
+			Expect(jobRunning(controller)).To(BeTrue())
+		})
+	})
+
+	Context("prepareTerminalPod()", func() {
+		It("Should remove the finalizer once the grace period expires", func() {
+			controller := newControllerWith(*newStuckTerminatingPod(podName, jobId))
+
+			By("Reconciling")
+			Expect(controller.prepareTerminalPod(ctx, newRequest(podName))).To(Succeed())
+
+			By("Check the pod is released")
+			pod := &corev1.Pod{}
+			err := controller.Get(ctx, types.NamespacedName{
+				Namespace: metav1.NamespaceDefault, Name: podName,
+			}, pod)
+			if err == nil {
+				Expect(pod.Finalizers).To(BeEmpty())
+			} else {
+				Expect(apierrors.IsNotFound(err)).To(BeTrue())
+			}
+		})
+
+		It("Should retain the finalizer while within the grace period", func() {
+			controller := newControllerWith(*newRecentlyTerminatingPod(podName, jobId))
+
+			By("Reconciling")
+			Expect(controller.prepareTerminalPod(ctx, newRequest(podName))).To(Succeed())
+
+			By("Check finalizer still exists")
+			Expect(getPod(controller, podName).Finalizers).
+				To(Equal([]string{wellknown.FinalizerScheduler}))
 		})
 	})
 })
