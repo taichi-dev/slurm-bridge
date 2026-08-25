@@ -9,6 +9,7 @@ import (
 	"strconv"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/klog/v2"
 	"k8s.io/utils/ptr"
 
@@ -36,6 +37,7 @@ type SlurmControlInterface interface {
 	SubmitJob(ctx context.Context, pod *corev1.Pod, slurmJobIR *slurmjobir.SlurmJobIR) (int32, error)
 	UpdateJob(ctx context.Context, pod *corev1.Pod, slurmJobIR *slurmjobir.SlurmJobIR) (int32, error)
 	IsSlurmNode(ctx context.Context, node string) (bool, error)
+	GetSlurmNodeNames(ctx context.Context) (sets.Set[string], error)
 }
 
 // RealPodControl is the default implementation of SlurmControlInterface.
@@ -191,10 +193,22 @@ func (r *realSlurmControl) submitJob(ctx context.Context, pod *corev1.Pod, slurm
 					return &api.V0044Uint64NoValStruct{Set: ptr.To(false)}
 				}
 			}(),
-			MinimumNodes:  slurmJobIR.JobInfo.MinNodes,
-			Name:          slurmJobIR.JobInfo.JobName,
-			Nodes:         ptr.To(strconv.Itoa(len(slurmJobIR.Pods.Items))),
-			RequiredNodes: ptr.To(api.V0044CsvString(slurmJobIR.JobInfo.Nodes)),
+			MinimumNodes: slurmJobIR.JobInfo.MinNodes,
+			Name:         slurmJobIR.JobInfo.JobName,
+			Nodes:        ptr.To(strconv.Itoa(len(slurmJobIR.Pods.Items))),
+			// The kubernetes-infeasible complement is submitted as
+			// excluded_nodes rather than the feasible set as
+			// required_nodes: slurmctld fatally re-validates
+			// required_nodes on every state recovery (restart or
+			// reconfigure), so one entry naming a since-deleted
+			// dynamic node kills the job with requeue disabled.
+			// Stale excluded_nodes entries are ignored on recovery.
+			ExcludedNodes: func() *api.V0044CsvString {
+				if len(slurmJobIR.JobInfo.ExcNodes) == 0 {
+					return nil
+				}
+				return ptr.To(api.V0044CsvString(slurmJobIR.JobInfo.ExcNodes))
+			}(),
 			Partition: func() *string {
 				if slurmJobIR.JobInfo.Partition == nil {
 					return &r.partition
@@ -235,6 +249,26 @@ func (r *realSlurmControl) submitJob(ctx context.Context, pod *corev1.Pod, slurm
 		}
 	}
 	return ptr.Deref(job.JobId, 0), nil
+}
+
+// GetSlurmNodeNames returns the names of all nodes currently known to Slurm
+// with a single list call, so callers testing many candidate names avoid
+// one lookup per name (each miss is logged as an error by slurmctld).
+func (r *realSlurmControl) GetSlurmNodeNames(ctx context.Context) (sets.Set[string], error) {
+	logger := klog.FromContext(ctx)
+
+	nodes := &slurmtypes.V0044NodeList{}
+	if err := r.List(ctx, nodes); err != nil {
+		logger.Error(err, "could not list slurm nodes")
+		return nil, err
+	}
+	nodeNames := sets.New[string]()
+	for _, node := range nodes.Items {
+		if node.Name != nil {
+			nodeNames.Insert(*node.Name)
+		}
+	}
+	return nodeNames, nil
 }
 
 func (r *realSlurmControl) IsSlurmNode(ctx context.Context, nodeName string) (bool, error) {
