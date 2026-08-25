@@ -390,6 +390,11 @@ func (sb *SlurmBridge) PostFilter(ctx context.Context, state fwk.CycleState, pod
 		logger.Error(err, "error getting nodes that SlurmBridge can use")
 		return nil, fwk.NewStatus(fwk.Error, err.Error())
 	}
+	slurmNodeNames, err := sb.slurmControl.GetSlurmNodeNames(ctx)
+	if err != nil {
+		logger.Error(err, "error listing slurm nodes")
+		return nil, fwk.NewStatus(fwk.Error, err.Error())
+	}
 	for _, node := range feasibleNodes {
 		status := m.Get(node.Node().Name)
 		// If the Unschedulable code was set by SlurmBridge
@@ -398,7 +403,7 @@ func (sb *SlurmBridge) PostFilter(ctx context.Context, state fwk.CycleState, pod
 		// this node for consideration.
 		if status.Plugin() == Name {
 			slurmName := nodecontrollerutils.GetSlurmNodeName(node.Node())
-			if isSlurm, _ := sb.slurmControl.IsSlurmNode(ctx, slurmName); isSlurm {
+			if slurmNodeNames.Has(slurmName) {
 				s.slurmJobIR.JobInfo.Nodes = append(s.slurmJobIR.JobInfo.Nodes, slurmName)
 			}
 		}
@@ -408,6 +413,34 @@ func (sb *SlurmBridge) PostFilter(ctx context.Context, state fwk.CycleState, pod
 	// scheduling cycle.
 	if len(s.slurmJobIR.JobInfo.Nodes) < len(s.slurmJobIR.Pods.Items) {
 		return nil, fwk.NewStatus(fwk.Success)
+	}
+
+	// Collect the complement of the feasible set: Slurm nodes whose
+	// kubernetes node was filtered out by a plugin other than SlurmBridge.
+	// These are passed to Slurm as excluded nodes instead of passing the
+	// feasible set as required nodes. The two encodings are equivalent for
+	// placement (slurmctld itself converts a required list larger than the
+	// node count into an exclusion of the complement), but required_nodes
+	// is fatally re-validated during slurmctld state recovery — a single
+	// entry naming a since-deleted dynamic node kills the job with requeue
+	// disabled — while stale excluded_nodes entries are tolerated.
+	allNodes, err := sb.handle.SnapshotSharedLister().NodeInfos().List()
+	if err != nil {
+		logger.Error(err, "error listing all nodes from the snapshot")
+		return nil, fwk.NewStatus(fwk.Error, err.Error())
+	}
+	feasibleSet := sets.New(s.slurmJobIR.JobInfo.Nodes...)
+	for _, node := range allNodes {
+		if node.Node() == nil {
+			continue
+		}
+		slurmName := nodecontrollerutils.GetSlurmNodeName(node.Node())
+		if feasibleSet.Has(slurmName) {
+			continue
+		}
+		if slurmNodeNames.Has(slurmName) {
+			s.slurmJobIR.JobInfo.ExcNodes = append(s.slurmJobIR.JobInfo.ExcNodes, slurmName)
+		}
 	}
 
 	// If no external job exists, we should create one with the list

@@ -615,6 +615,74 @@ func Test_realSlurmControl_SubmitJob(t *testing.T) {
 			want:    1,
 			wantErr: false,
 		},
+		{
+			name: "Submit external job passes infeasible nodes as ExcludedNodes and never RequiredNodes",
+			fields: fields{
+				Client: func() client.Client {
+					f := interceptor.Funcs{
+						Create: func(ctx context.Context, obj object.Object, req any, opts ...client.CreateOption) error {
+							obj.(*slurmtypes.V0044JobInfo).JobId = ptr.To(int32(1))
+							jobSubmit := req.(api.V0044JobSubmitReq)
+							if jobSubmit.Job.RequiredNodes != nil {
+								return fmt.Errorf("expected RequiredNodes to be unset, got %v", *jobSubmit.Job.RequiredNodes)
+							}
+							if jobSubmit.Job.ExcludedNodes == nil {
+								return fmt.Errorf("expected ExcludedNodes to be set")
+							}
+							if !reflect.DeepEqual(*jobSubmit.Job.ExcludedNodes, api.V0044CsvString{"node3"}) {
+								return fmt.Errorf("expected ExcludedNodes [node3], got %v", *jobSubmit.Job.ExcludedNodes)
+							}
+							return nil
+						},
+					}
+					return fake.NewClientBuilder().
+						WithInterceptorFuncs(f).
+						Build()
+				}(),
+			},
+			args: args{
+				ctx: context.Background(),
+				pod: st.MakePod().Name("foo").Namespace("slurm-bridge").Obj(),
+				slurmJobIR: &slurmjobir.SlurmJobIR{JobInfo: slurmjobir.SlurmJobIRJobInfo{
+					Nodes:    []string{"node1", "node2"},
+					ExcNodes: []string{"node3"},
+				}},
+			},
+			want:    1,
+			wantErr: false,
+		},
+		{
+			name: "Submit external job omits ExcludedNodes when every node is feasible",
+			fields: fields{
+				Client: func() client.Client {
+					f := interceptor.Funcs{
+						Create: func(ctx context.Context, obj object.Object, req any, opts ...client.CreateOption) error {
+							obj.(*slurmtypes.V0044JobInfo).JobId = ptr.To(int32(1))
+							jobSubmit := req.(api.V0044JobSubmitReq)
+							if jobSubmit.Job.RequiredNodes != nil {
+								return fmt.Errorf("expected RequiredNodes to be unset, got %v", *jobSubmit.Job.RequiredNodes)
+							}
+							if jobSubmit.Job.ExcludedNodes != nil {
+								return fmt.Errorf("expected ExcludedNodes to be unset, got %v", *jobSubmit.Job.ExcludedNodes)
+							}
+							return nil
+						},
+					}
+					return fake.NewClientBuilder().
+						WithInterceptorFuncs(f).
+						Build()
+				}(),
+			},
+			args: args{
+				ctx: context.Background(),
+				pod: st.MakePod().Name("foo").Namespace("slurm-bridge").Obj(),
+				slurmJobIR: &slurmjobir.SlurmJobIR{JobInfo: slurmjobir.SlurmJobIRJobInfo{
+					Nodes: []string{"node1", "node2"},
+				}},
+			},
+			want:    1,
+			wantErr: false,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -664,6 +732,26 @@ func TestNewControl(t *testing.T) {
 				t.Errorf("NewControl() = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+func Test_realSlurmControl_GetSlurmNodeNames(t *testing.T) {
+	ctx := context.Background()
+	nodes := &slurmtypes.V0044NodeList{
+		Items: []slurmtypes.V0044Node{
+			{V0044Node: api.V0044Node{Name: ptr.To("node1")}},
+			{V0044Node: api.V0044Node{Name: ptr.To("node2")}},
+		},
+	}
+	r := &realSlurmControl{
+		Client: fake.NewClientBuilder().WithLists(nodes).Build(),
+	}
+	got, err := r.GetSlurmNodeNames(ctx)
+	if err != nil {
+		t.Errorf("realSlurmControl.GetSlurmNodeNames() error = %v", err)
+	}
+	if !got.HasAll("node1", "node2") || got.Len() != 2 {
+		t.Errorf("realSlurmControl.GetSlurmNodeNames() = %v, want {node1, node2}", got)
 	}
 }
 
