@@ -129,7 +129,11 @@ func (r *realSlurmControl) GetJob(ctx context.Context, pod *corev1.Pod) (*Extern
 		return &jobOut, nil
 	}
 
-	err := r.Get(ctx, jobId, job)
+	// Single-job reads drive the PostFilter state machine (exists/pending/
+	// nodes-allocated decisions) and job-start detection, so they must stay
+	// live: bypass the informer cache. The payload is a single job record —
+	// caching it buys nothing and costs up to a sync period of staleness.
+	err := r.Get(ctx, jobId, job, &client.GetOptions{SkipCache: true})
 	if err != nil {
 		if err.Error() == http.StatusText(http.StatusNotFound) {
 			return &jobOut, nil

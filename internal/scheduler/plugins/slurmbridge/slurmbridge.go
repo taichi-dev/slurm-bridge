@@ -219,6 +219,13 @@ func New(ctx context.Context, obj runtime.Object, handle fwk.Handle) (fwk.Plugin
 		logger.Error(err, "unable to create slurm client")
 		return nil, err
 	}
+	// Start the slurm-client informer cache (as cmd/controllers does) so that
+	// List reads — most importantly the full /jobs listing that
+	// validatePodToJob consumes on every scheduling cycle — are served from
+	// memory instead of re-fetching and JSON-decoding the whole payload per
+	// attempt (~30MB / ~900 jobs on large clusters). Freshness-critical
+	// single-object reads opt out via SkipCache (see slurmcontrol.GetJob).
+	go slurmClient.Start(context.Background())
 	sc := slurmcontrol.NewControl(slurmClient, cfg.MCSLabel, cfg.Partition)
 	plugin := &SlurmBridge{
 		Client:        client,
@@ -687,22 +694,42 @@ func (sb *SlurmBridge) validatePodToJob(ctx context.Context, pod *corev1.Pod) er
 	}
 	if val, ok := (*podToJob)[namespacedName.String()]; ok {
 		toUpdate := pod.DeepCopy()
-		// If the pod has a JobId set, validate it against podToJob
-		if pod.Labels[wellknown.LabelExternalJobId] != "" &&
-			val.JobId != slurmjobir.ParseSlurmJobId(pod.Labels[wellknown.LabelExternalJobId]) {
-			logger.V(3).Info("Pod jobId label does not match Slurm", "pod", klog.KObj(pod),
-				"jobId label", pod.Labels[wellknown.LabelExternalJobId],
-				"slurm job", val)
-			toUpdate.Labels[wellknown.LabelExternalJobId] = strconv.Itoa(int(val.JobId))
-		}
-		// If the pod has a Node set, validate it against podToJob
+		labelMismatch := pod.Labels[wellknown.LabelExternalJobId] != "" &&
+			val.JobId != slurmjobir.ParseSlurmJobId(pod.Labels[wellknown.LabelExternalJobId])
 		nodes, _ := hostlist.Expand(val.Nodes)
-		if pod.Annotations[wellknown.AnnotationExternalJobNode] != "" &&
-			!slices.Contains(nodes, pod.Annotations[wellknown.AnnotationExternalJobNode]) {
-			logger.V(3).Info("Pod node annotation does not match Slurm nodes", "pod", klog.KObj(pod),
-				"node annotation", pod.Annotations[wellknown.AnnotationExternalJobNode],
-				"slurm job", val)
-			toUpdate.Annotations[wellknown.AnnotationExternalJobNode] = ""
+		annotationMismatch := pod.Annotations[wellknown.AnnotationExternalJobNode] != "" &&
+			!slices.Contains(nodes, pod.Annotations[wellknown.AnnotationExternalJobNode])
+		if labelMismatch || annotationMismatch {
+			// podToJob is served from the informer cache and may lag Slurm
+			// by up to a sync period. Rewriting the pod's job linkage from a
+			// stale snapshot can point it at a dead job id or clear a node
+			// annotation Slurm just allocated, forcing needless (or
+			// duplicate) rescheduling — so confirm against a live read of
+			// the job the pod currently references before correcting.
+			fresh, err := sb.slurmControl.GetJob(ctx, pod)
+			if err != nil {
+				logger.Error(err, "error confirming pod's job before correction", "pod", klog.KObj(pod))
+				return err
+			}
+			// Only rewrite the label if the currently referenced job is
+			// genuinely gone from Slurm.
+			if labelMismatch && fresh.JobId == 0 {
+				logger.V(3).Info("Pod jobId label does not match Slurm", "pod", klog.KObj(pod),
+					"jobId label", pod.Labels[wellknown.LabelExternalJobId],
+					"slurm job", val)
+				toUpdate.Labels[wellknown.LabelExternalJobId] = strconv.Itoa(int(val.JobId))
+			}
+			// Only clear the node annotation if the live job also does not
+			// hold that node.
+			if annotationMismatch {
+				freshNodes, _ := hostlist.Expand(fresh.Nodes)
+				if !slices.Contains(freshNodes, pod.Annotations[wellknown.AnnotationExternalJobNode]) {
+					logger.V(3).Info("Pod node annotation does not match Slurm nodes", "pod", klog.KObj(pod),
+						"node annotation", pod.Annotations[wellknown.AnnotationExternalJobNode],
+						"slurm job", val)
+					toUpdate.Annotations[wellknown.AnnotationExternalJobNode] = ""
+				}
+			}
 		}
 		if !reflect.DeepEqual(pod, toUpdate) {
 			if err := sb.Patch(ctx, toUpdate, client.StrategicMergeFrom(pod)); err != nil {
