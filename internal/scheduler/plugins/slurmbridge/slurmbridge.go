@@ -183,6 +183,19 @@ func getStateData(cs fwk.CycleState) (*stateData, error) {
 }
 
 // activatePod will put the pod back into the scheduling queue.
+//
+// Activate is a ForceActivate: at the end of the scheduling cycle the pod is
+// moved straight to the active queue, skipping scheduling backoff entirely.
+// Under a strict PrioritySort profile a high-priority pod that is activated
+// on every cycle monopolizes the (single-threaded) scheduling loop and
+// starves every lower-priority pod of scheduling attempts.
+//
+// Only call this when the external job has made observable progress (job
+// submitted, nodes allocated/annotated) so the next cycle can act on it. A
+// pod whose job is merely queued in Slurm must instead be returned as
+// Unschedulable so it waits in the unschedulable pool and retries after the
+// normal backoff (the plugin registers no EnqueueExtensions, so any cluster
+// event requeues it once backoff expires).
 func (sb *SlurmBridge) activatePod(logger klog.Logger, pod *corev1.Pod) {
 	sb.handle.Activate(logger, map[string]*corev1.Pod{string(pod.UID): pod})
 }
@@ -449,9 +462,11 @@ func (sb *SlurmBridge) PostFilter(ctx context.Context, state fwk.CycleState, pod
 	if externalJob.Nodes == "" {
 		logger.V(4).Info("external job exists but no nodes have been allocated")
 		if !externalJob.Pending {
+			// No progress to act on yet: the job left PENDING but Slurm has
+			// not reported nodes. Do NOT activate — wait out the scheduling
+			// backoff instead (see activatePod).
 			logger.V(4).Info("external job is no longer pending; waiting for allocated nodes")
-			sb.activatePod(logger, pod)
-			return nil, fwk.NewStatus(fwk.Success)
+			return nil, fwk.NewStatus(fwk.Unschedulable, ErrorJobNotPendingNoNodes.Error())
 		}
 		// As the external job is not yet running, update to the job
 		// to include any changes from slurmJobIR.
@@ -477,9 +492,10 @@ func (sb *SlurmBridge) PostFilter(ctx context.Context, state fwk.CycleState, pod
 					sb.activatePod(logger, pod)
 					return nil, fwk.NewStatus(fwk.Success)
 				}
+				// Same as the non-pending-no-nodes case above: nothing to act
+				// on until Slurm reports nodes, so let backoff pace the retry.
 				logger.Error(ErrorJobNotPendingNoNodes, "external job update raced with Slurm but no nodes were allocated")
-				sb.activatePod(logger, pod)
-				return nil, fwk.NewStatus(fwk.Success)
+				return nil, fwk.NewStatus(fwk.Unschedulable, ErrorJobNotPendingNoNodes.Error())
 			}
 			logger.Error(err, "error updating Slurm job")
 			return nil, fwk.NewStatus(fwk.Error, err.Error())
@@ -491,8 +507,13 @@ func (sb *SlurmBridge) PostFilter(ctx context.Context, state fwk.CycleState, pod
 			logger.Error(err, "error labeling pods after update")
 			return nil, fwk.NewStatus(fwk.Error, err.Error())
 		}
-		sb.activatePod(logger, pod)
-		return nil, fwk.NewStatus(fwk.Success, ErrorNoNodesAssigned.Error())
+		// The job is queued in Slurm waiting for capacity — potentially for
+		// hours. Force-activating here made the scheduler retry this pod
+		// immediately on every cycle, and under strict PrioritySort a blocked
+		// high-priority pod then starves all lower-priority pods of
+		// scheduling attempts (INF-1849). Return Unschedulable so the pod
+		// waits out the normal backoff between polls of the Slurm job.
+		return nil, fwk.NewStatus(fwk.Unschedulable, ErrorNoNodesAssigned.Error())
 	}
 
 	// If we get here, that means the job started running after PreFilter occurred.

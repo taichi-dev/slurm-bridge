@@ -1013,9 +1013,14 @@ func TestSlurmBridge_PostFilter(t *testing.T) {
 					"node2": fwk.NewStatus(fwk.Unschedulable).WithPlugin(Name),
 				}, fwk.NewStatus(fwk.UnschedulableAndUnresolvable)),
 			},
-			want:         nil,
-			want1:        fwk.NewStatus(fwk.Success, ErrorNoNodesAssigned.Error()),
-			wantActivate: true,
+			want: nil,
+			// Regression for INF-1849: a job queued in Slurm waiting for
+			// capacity must go through scheduling backoff, NOT be
+			// force-activated — activation skips backoff and lets a blocked
+			// high-priority pod starve lower-priority pods under
+			// PrioritySort.
+			want1:        fwk.NewStatus(fwk.Unschedulable, ErrorNoNodesAssigned.Error()),
+			wantActivate: false,
 		},
 		{
 			name: "Updating an external job fails",
@@ -1117,9 +1122,10 @@ func TestSlurmBridge_PostFilter(t *testing.T) {
 					"node2": fwk.NewStatus(fwk.Unschedulable).WithPlugin(Name),
 				}, fwk.NewStatus(fwk.UnschedulableAndUnresolvable)),
 			},
-			want:         nil,
-			want1:        fwk.NewStatus(fwk.Success),
-			wantActivate: true,
+			want: nil,
+			// No nodes to act on yet: back off instead of force-activating.
+			want1:        fwk.NewStatus(fwk.Unschedulable, ErrorJobNotPendingNoNodes.Error()),
+			wantActivate: false,
 		},
 		{
 			name: "Non-pending external job with no nodes skips update",
@@ -1173,9 +1179,10 @@ func TestSlurmBridge_PostFilter(t *testing.T) {
 					"node2": fwk.NewStatus(fwk.Unschedulable).WithPlugin(Name),
 				}, fwk.NewStatus(fwk.UnschedulableAndUnresolvable)),
 			},
-			want:         nil,
-			want1:        fwk.NewStatus(fwk.Success),
-			wantActivate: true,
+			want: nil,
+			// No nodes to act on yet: back off instead of force-activating.
+			want1:        fwk.NewStatus(fwk.Unschedulable, ErrorJobNotPendingNoNodes.Error()),
+			wantActivate: false,
 		},
 	}
 	for _, tt := range tests {
