@@ -1561,6 +1561,121 @@ func TestSlurmBridge_validatePodToJob(t *testing.T) {
 			}(),
 			wantErr: false,
 		},
+		{
+			// Regression: the podToJob map is cache-served and may lag Slurm.
+			// A stale snapshot claiming the job has no nodes must not clear a
+			// node annotation the live job actually holds.
+			name: "Stale map does not clear annotation the live job holds",
+			fields: fields{
+				Client: kubefake.NewFakeClient(
+					st.MakePod().Name("pod1").
+						Labels(map[string]string{wellknown.LabelExternalJobId: "1"}).
+						Annotations(map[string]string{wellknown.AnnotationExternalJobNode: "node1"}).Obj(),
+				),
+				slurmControl: func() slurmcontrol.SlurmControlInterface {
+					list := &types.V0044JobInfoList{
+						Items: []types.V0044JobInfo{
+							{V0044JobInfo: api.V0044JobInfo{
+								AdminComment: func() *string {
+									pi := externaljobinfo.ExternalJobInfo{
+										Pods: []string{"/pod1"},
+									}
+									return ptr.To(pi.ToString())
+								}(),
+								JobId: ptr.To[int32](1),
+								Nodes: ptr.To(""), // stale: allocation not visible yet
+							}},
+						},
+					}
+					f := interceptor.Funcs{
+						Get: func(ctx context.Context, key object.ObjectKey, obj object.Object, opts ...slurmclient.GetOption) error {
+							job, ok := obj.(*types.V0044JobInfo)
+							if !ok {
+								return errors.New("unexpected type")
+							}
+							*job = types.V0044JobInfo{V0044JobInfo: api.V0044JobInfo{
+								JobId:    ptr.To[int32](1),
+								JobState: &[]api.V0044JobInfoJobState{api.V0044JobInfoJobStateRUNNING},
+								Nodes:    ptr.To("node1"), // live truth
+							}}
+							return nil
+						},
+					}
+					c := fake.NewClientBuilder().
+						WithLists(list).
+						WithInterceptorFuncs(f).
+						Build()
+					return slurmcontrol.NewControl(c, "kubernetes", "slurm-bridge")
+				}(),
+				handle: nil,
+			},
+			args: args{
+				ctx: context.TODO(),
+				pod: st.MakePod().Name("pod1").
+					Labels(map[string]string{wellknown.LabelExternalJobId: "1"}).
+					Annotations(map[string]string{wellknown.AnnotationExternalJobNode: "node1"}).Obj(),
+			},
+			want: st.MakePod().Name("pod1").
+				Labels(map[string]string{wellknown.LabelExternalJobId: "1"}).
+				Annotations(map[string]string{wellknown.AnnotationExternalJobNode: "node1"}).Obj(),
+			wantErr: false,
+		},
+		{
+			// Regression: a stale snapshot naming an old job id must not
+			// rewrite the label of a pod whose currently referenced job is
+			// still alive in Slurm.
+			name: "Stale map does not rewrite label while live job is alive",
+			fields: fields{
+				Client: kubefake.NewFakeClient(
+					st.MakePod().Name("pod1").
+						Labels(map[string]string{wellknown.LabelExternalJobId: "2"}).Obj(),
+				),
+				slurmControl: func() slurmcontrol.SlurmControlInterface {
+					list := &types.V0044JobInfoList{
+						Items: []types.V0044JobInfo{
+							{V0044JobInfo: api.V0044JobInfo{
+								AdminComment: func() *string {
+									pi := externaljobinfo.ExternalJobInfo{
+										Pods: []string{"/pod1"},
+									}
+									return ptr.To(pi.ToString())
+								}(),
+								JobId: ptr.To[int32](1), // stale: superseded job id
+								Nodes: ptr.To(""),
+							}},
+						},
+					}
+					f := interceptor.Funcs{
+						Get: func(ctx context.Context, key object.ObjectKey, obj object.Object, opts ...slurmclient.GetOption) error {
+							job, ok := obj.(*types.V0044JobInfo)
+							if !ok {
+								return errors.New("unexpected type")
+							}
+							*job = types.V0044JobInfo{V0044JobInfo: api.V0044JobInfo{
+								JobId:    ptr.To[int32](2),
+								JobState: &[]api.V0044JobInfoJobState{api.V0044JobInfoJobStatePENDING},
+								Nodes:    ptr.To(""),
+							}}
+							return nil
+						},
+					}
+					c := fake.NewClientBuilder().
+						WithLists(list).
+						WithInterceptorFuncs(f).
+						Build()
+					return slurmcontrol.NewControl(c, "kubernetes", "slurm-bridge")
+				}(),
+				handle: nil,
+			},
+			args: args{
+				ctx: context.TODO(),
+				pod: st.MakePod().Name("pod1").
+					Labels(map[string]string{wellknown.LabelExternalJobId: "2"}).Obj(),
+			},
+			want: st.MakePod().Name("pod1").
+				Labels(map[string]string{wellknown.LabelExternalJobId: "2"}).Obj(),
+			wantErr: false,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

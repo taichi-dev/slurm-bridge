@@ -32,6 +32,7 @@ type SlurmControlInterface interface {
 	GetResources(ctx context.Context, pod *corev1.Pod, nodeName string) (*NodeResources, error)
 	DeleteJob(ctx context.Context, pod *corev1.Pod) error
 	GetJobsForPods(ctx context.Context) (*map[string]ExternalJob, error)
+	GetCachedJobsForPods(ctx context.Context) (*map[string]ExternalJob, error)
 	GetJob(ctx context.Context, pod *corev1.Pod) (*ExternalJob, error)
 	GetNodeNames(ctx context.Context) ([]string, error)
 	SubmitJob(ctx context.Context, pod *corev1.Pod, slurmJobIR *slurmjobir.SlurmJobIR) (int32, error)
@@ -43,6 +44,11 @@ type realSlurmControl struct {
 	client.Client
 	mcsLabel  string
 	partition string
+	// jobsCache serves GetJobsForPods. The full /jobs listing is the one
+	// expensive Slurm read on the scheduling hot path (~30MB JSON on large
+	// clusters, fetched and decoded on every PreFilter); everything else the
+	// scheduler reads is a small single-object request and stays uncached.
+	jobsCache *jobsCache
 }
 
 type NodeResources struct {
@@ -87,11 +93,40 @@ func (r *realSlurmControl) DeleteJob(ctx context.Context, pod *corev1.Pod) error
 		logger.Error(err, "failed to delete Slurm job", "jobId", jobId)
 		return err
 	}
+	// Hide the deleted job from the served pod->job map immediately, so a
+	// stale snapshot cannot resurrect its pod associations.
+	r.jobsCache.purge(jobId)
 	return nil
 }
 
-// GetJobsForPods will get a list of all slurm jobs and translate them into a podToJob
+// GetJobsForPods returns the pod->job map derived from the full Slurm jobs
+// listing, fetched live. This fetches and decodes every job in Slurm — do
+// not call it on the scheduling hot path; per-cycle consumers should use
+// GetCachedJobsForPods instead.
 func (r *realSlurmControl) GetJobsForPods(ctx context.Context) (*map[string]ExternalJob, error) {
+	podToJob, err := r.listJobsForPods(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return &podToJob, nil
+}
+
+// GetCachedJobsForPods returns the same pod->job map served from jobsCache:
+// at most jobsCacheTTL stale, refreshed in the background, with this
+// scheduler's own submits/deletes overlaid immediately. Callers must treat
+// it as advisory and confirm against GetJob (always live) before mutating
+// pod state based on it.
+func (r *realSlurmControl) GetCachedJobsForPods(ctx context.Context) (*map[string]ExternalJob, error) {
+	if r.jobsCache == nil {
+		// Zero-value receiver (constructed without NewControl): behave as
+		// if the cache did not exist and fetch directly.
+		return r.GetJobsForPods(ctx)
+	}
+	return r.jobsCache.get(ctx)
+}
+
+// listJobsForPods fetches all Slurm jobs and translates them into a podToJob map.
+func (r *realSlurmControl) listJobsForPods(ctx context.Context) (map[string]ExternalJob, error) {
 	logger := klog.FromContext(ctx)
 
 	jobs := &slurmtypes.V0044JobInfoList{}
@@ -115,7 +150,7 @@ func (r *realSlurmControl) GetJobsForPods(ctx context.Context) (*map[string]Exte
 		}
 	}
 
-	return &podToJob, nil
+	return podToJob, nil
 }
 
 // GetJob will check if an external job has been created for a given pod
@@ -246,6 +281,13 @@ func (r *realSlurmControl) submitJob(ctx context.Context, pod *corev1.Pod, slurm
 			return 0, err
 		}
 	}
+	// Reflect the mutation in the served pod->job map immediately, so a
+	// snapshot fetched before this submit/update cannot hide it.
+	r.jobsCache.upsert(extInfo.Pods, ExternalJob{
+		JobId:   ptr.Deref(job.JobId, 0),
+		Nodes:   "",
+		Pending: true,
+	})
 	return ptr.Deref(job.JobId, 0), nil
 }
 
@@ -319,9 +361,11 @@ func (r *realSlurmControl) getNodeExtra(ctx context.Context, nodeName string) (s
 var _ SlurmControlInterface = &realSlurmControl{}
 
 func NewControl(client client.Client, mcsLabel string, partition string) SlurmControlInterface {
-	return &realSlurmControl{
+	r := &realSlurmControl{
 		Client:    client,
 		mcsLabel:  mcsLabel,
 		partition: partition,
 	}
+	r.jobsCache = newJobsCache(r.listJobsForPods)
+	return r
 }

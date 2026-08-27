@@ -661,7 +661,18 @@ func TestNewControl(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := NewControl(tt.args.client, tt.args.mcsLabel, tt.args.partition); !reflect.DeepEqual(got, tt.want) {
+			got := NewControl(tt.args.client, tt.args.mcsLabel, tt.args.partition)
+			r, ok := got.(*realSlurmControl)
+			if !ok {
+				t.Fatalf("NewControl() returned %T, want *realSlurmControl", got)
+			}
+			if r.jobsCache == nil {
+				t.Error("NewControl() did not wire the jobs cache")
+			}
+			// The cache holds a method value on r; blank it for the
+			// structural comparison.
+			r.jobsCache = nil
+			if !reflect.DeepEqual(got, tt.want) {
 				t.Errorf("NewControl() = %v, want %v", got, tt.want)
 			}
 		})
