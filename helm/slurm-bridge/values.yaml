@@ -22,6 +22,12 @@ scheduler:
   replicaCount: 1
   # -- Enables leader election.
   leaderElect: false
+  # -- (integer)
+  # Maximum kube-scheduler backoff for unschedulable pods, in seconds
+  # (kube-scheduler default: 10). Backoff grows per failed attempt, so
+  # raising this slows only chronically unschedulable pods (e.g. pods whose
+  # Slurm job is waiting for capacity), never fresh ones.
+  podMaxBackoffSeconds: ~
   # -- Set the priority class to use.
   # Ref: https://kubernetes.io/docs/concepts/scheduling-eviction/pod-priority-preemption/#priorityclass
   priorityClassName: ""

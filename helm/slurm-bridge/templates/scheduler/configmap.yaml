@@ -12,6 +12,9 @@ data:
   scheduler-config.yaml: |
     apiVersion: kubescheduler.config.k8s.io/v1
     kind: KubeSchedulerConfiguration
+    {{- with .Values.scheduler.podMaxBackoffSeconds }}
+    podMaxBackoffSeconds: {{ . }}
+    {{- end }}
     leaderElection:
       leaderElect: {{ .Values.scheduler.leaderElect }}
       resourceNamespace: {{ include "slurm-bridge.namespace" . }}
