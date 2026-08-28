@@ -41,6 +41,15 @@ func (r *realSlurmControl) IsJobRunning(ctx context.Context, pod *corev1.Pod) (b
 	if jobId == "" {
 		return false, nil
 	}
+	// Answer from the job cache when it already shows the job running. A
+	// cache miss or a non-running state must be confirmed with a live read
+	// before the caller acts on it: the cache lags by up to one refresh
+	// interval, and a freshly submitted job may not be in it yet.
+	if err := r.Get(ctx, jobId, job); err == nil {
+		if job.GetStateAsSet().Has(api.V0044JobInfoJobStateRUNNING) {
+			return true, nil
+		}
+	}
 	err := r.Get(ctx, jobId, job, &client.GetOptions{RefreshCache: true})
 	if err != nil {
 		if tolerateError(err) {

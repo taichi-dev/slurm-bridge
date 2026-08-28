@@ -17,6 +17,8 @@ import (
 	api "github.com/SlinkyProject/slurm-client/api/v0044"
 	"github.com/SlinkyProject/slurm-client/pkg/client"
 	"github.com/SlinkyProject/slurm-client/pkg/client/fake"
+	"github.com/SlinkyProject/slurm-client/pkg/client/interceptor"
+	"github.com/SlinkyProject/slurm-client/pkg/object"
 	"github.com/SlinkyProject/slurm-client/pkg/types"
 )
 
@@ -134,6 +136,103 @@ func Test_realSlurmControl_GetJob(t *testing.T) {
 				},
 			},
 			want:    false,
+			wantErr: false,
+		},
+		{
+			name: "Stale cache shows completed, live read shows running",
+			fields: fields{
+				Client: fake.NewClientBuilder().WithInterceptorFuncs(interceptor.Funcs{
+					Get: func(ctx context.Context, key object.ObjectKey, obj object.Object, opts ...client.GetOption) error {
+						o := &client.GetOptions{}
+						o.ApplyOptions(opts)
+						state := api.V0044JobInfoJobStateCOMPLETED
+						if o.RefreshCache {
+							state = api.V0044JobInfoJobStateRUNNING
+						}
+						job := obj.(*types.V0044JobInfo)
+						job.V0044JobInfo = api.V0044JobInfo{
+							JobId:    ptr.To[int32](1),
+							JobState: &[]api.V0044JobInfoJobState{state},
+						}
+						return nil
+					},
+				}).Build(),
+			},
+			args: args{
+				ctx: ctx,
+				pod: &corev1.Pod{
+					ObjectMeta: metav1.ObjectMeta{
+						Labels: map[string]string{
+							wellknown.LabelExternalJobId: "1",
+						},
+					},
+				},
+			},
+			want:    true,
+			wantErr: false,
+		},
+		{
+			name: "Job missing from cache, live read shows running",
+			fields: fields{
+				Client: fake.NewClientBuilder().WithInterceptorFuncs(interceptor.Funcs{
+					Get: func(ctx context.Context, key object.ObjectKey, obj object.Object, opts ...client.GetOption) error {
+						o := &client.GetOptions{}
+						o.ApplyOptions(opts)
+						if !o.RefreshCache {
+							return errors.New("not found")
+						}
+						job := obj.(*types.V0044JobInfo)
+						job.V0044JobInfo = api.V0044JobInfo{
+							JobId:    ptr.To[int32](1),
+							JobState: &[]api.V0044JobInfoJobState{api.V0044JobInfoJobStateRUNNING},
+						}
+						return nil
+					},
+				}).Build(),
+			},
+			args: args{
+				ctx: ctx,
+				pod: &corev1.Pod{
+					ObjectMeta: metav1.ObjectMeta{
+						Labels: map[string]string{
+							wellknown.LabelExternalJobId: "1",
+						},
+					},
+				},
+			},
+			want:    true,
+			wantErr: false,
+		},
+		{
+			name: "Cache shows running, no live read",
+			fields: fields{
+				Client: fake.NewClientBuilder().WithInterceptorFuncs(interceptor.Funcs{
+					Get: func(ctx context.Context, key object.ObjectKey, obj object.Object, opts ...client.GetOption) error {
+						o := &client.GetOptions{}
+						o.ApplyOptions(opts)
+						if o.RefreshCache {
+							return errors.New("unexpected live read")
+						}
+						job := obj.(*types.V0044JobInfo)
+						job.V0044JobInfo = api.V0044JobInfo{
+							JobId:    ptr.To[int32](1),
+							JobState: &[]api.V0044JobInfoJobState{api.V0044JobInfoJobStateRUNNING},
+						}
+						return nil
+					},
+				}).Build(),
+			},
+			args: args{
+				ctx: ctx,
+				pod: &corev1.Pod{
+					ObjectMeta: metav1.ObjectMeta{
+						Labels: map[string]string{
+							wellknown.LabelExternalJobId: "1",
+						},
+					},
+				},
+			},
+			want:    true,
 			wantErr: false,
 		},
 	}
