@@ -149,7 +149,8 @@ func TranslateToSlurmJobIR(c client.Client, ctx context.Context, pod *corev1.Pod
 	return slurmJobIR, err
 }
 
-/* Set CPU and Memory for the external job based on the maximum Pod CPU and Memory (including overhead) */
+// Reserve native CPU and memory requests, including init containers, sidecars
+// and Pod overhead. CPU DRA retains its device-count allocation semantics.
 func parsePodsCpuAndMemory(slurmJobIR *SlurmJobIR) {
 	var cpuMax resource.Quantity
 	var memMax resource.Quantity
@@ -160,9 +161,6 @@ func parsePodsCpuAndMemory(slurmJobIR *SlurmJobIR) {
 		if req.Cpu().Cmp(cpuMax) == 1 {
 			cpuMax = *req.Cpu()
 		}
-		if lim.Cpu().Cmp(cpuMax) == 1 {
-			cpuMax = *lim.Cpu()
-		}
 		if quantity := req[cpuDRAResourceName]; quantity.Cmp(cpuMax) == 1 {
 			cpuMax = quantity
 		}
@@ -171,9 +169,6 @@ func parsePodsCpuAndMemory(slurmJobIR *SlurmJobIR) {
 		}
 		if req.Memory().Cmp(memMax) == 1 {
 			memMax = *req.Memory()
-		}
-		if lim.Memory().Cmp(memMax) == 1 {
-			memMax = *lim.Memory()
 		}
 	}
 	// If either CPU or Memory is set to 0, leave that value unset so Slurm

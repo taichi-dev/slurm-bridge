@@ -30,6 +30,10 @@ func newJob(name string) *batchv1.Job {
 			Template: corev1.PodTemplateSpec{
 				Spec: corev1.PodSpec{
 					Resources: &corev1.ResourceRequirements{
+						Requests: corev1.ResourceList{
+							corev1.ResourceCPU:    *resource.NewQuantity(22, resource.DecimalSI),
+							corev1.ResourceMemory: *resource.NewQuantity(1024*1024, resource.DecimalSI),
+						},
 						Limits: corev1.ResourceList{
 							corev1.ResourceCPU:    *resource.NewQuantity(22, resource.DecimalSI),
 							corev1.ResourceMemory: *resource.NewQuantity(1024*1024, resource.DecimalSI),
@@ -50,6 +54,26 @@ func newJobPod(name, jobName string) *corev1.Pod {
 				"job-name": jobName,
 			},
 		},
+	}
+}
+
+func TestJobPodLevelResourcesUseRequests(t *testing.T) {
+	job := newJob("requests-job")
+	job.Spec.Template.Spec.Resources.Requests = corev1.ResourceList{
+		corev1.ResourceCPU: resource.MustParse("3"), corev1.ResourceMemory: resource.MustParse("32Mi"),
+	}
+	job.Spec.Template.Spec.Resources.Limits = corev1.ResourceList{
+		corev1.ResourceCPU: resource.MustParse("22"), corev1.ResourceMemory: resource.MustParse("64Mi"),
+	}
+	scheme := runtime.NewScheme()
+	utilruntime.Must(kubescheme.AddToScheme(scheme))
+	tt := translator{Reader: fake.NewClientBuilder().WithScheme(scheme).WithObjects(job).Build(), ctx: context.Background()}
+	ir, err := tt.fromJob(newJobPod("requests-pod", job.Name), &metav1.PartialObjectMetadata{ObjectMeta: job.ObjectMeta})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ir.JobInfo.CpuPerTask == nil || *ir.JobInfo.CpuPerTask != 3 || ir.JobInfo.MemPerNode == nil || *ir.JobInfo.MemPerNode != 32 {
+		t.Fatalf("Job resources were not taken from requests: %+v", ir.JobInfo)
 	}
 }
 

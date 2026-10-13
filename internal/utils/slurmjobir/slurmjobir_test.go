@@ -348,8 +348,8 @@ func Test_parsePodsCpuAndMemory(t *testing.T) {
 					JobInfo: SlurmJobIRJobInfo{},
 				},
 			},
-			cpuPerTask: ptr.To(int32(2)),
-			memPerNode: ptr.To(int64(200)),
+			cpuPerTask: ptr.To(int32(1)),
+			memPerNode: ptr.To(int64(100)),
 		},
 		{
 			name: "requests set on multiple pods",
@@ -366,7 +366,7 @@ func Test_parsePodsCpuAndMemory(t *testing.T) {
 				},
 			},
 			cpuPerTask: ptr.To(int32(8)),
-			memPerNode: ptr.To(int64(400)),
+			memPerNode: ptr.To(int64(100)),
 		},
 		{
 			name: "CPU DRA request sets CPUs per task",
