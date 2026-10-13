@@ -75,6 +75,11 @@ Slurm is a full featured HPC workload manager. To highlight a few features:
 
 ## Limitations
 
+- Native CPU and memory are reserved in Slurm from Pod requests, including
+  init containers, restartable sidecars and Pod overhead. Container limits
+  remain runtime ceilings enforced by Kubernetes, rather than reservations.
+  CPU quantities round up to whole CPUs before Slurm's core allocation.
+  Existing external jobs retain their allocations until they are recreated.
 - Exclusive, whole node allocations are made for each pod.
 - Only supports the following DRA drivers:
   - [DRA Driver CPU][dra-driver-cpu] for CPUs.
