@@ -27,8 +27,12 @@ func (t *translator) fromJob(pod *corev1.Pod, rootPOM *metav1.PartialObjectMetad
 	slurmJobIR.Pods.Items = append(slurmJobIR.Pods.Items, *pod)
 	slurmJobIR.JobInfo.MinNodes = ptr.To(int32(1))
 	if job.Spec.Template.Spec.Resources != nil {
-		slurmJobIR.JobInfo.CpuPerTask = ptr.To(int32(job.Spec.Template.Spec.Resources.Requests.Cpu().Value())) //nolint:gosec // disable G115
-		slurmJobIR.JobInfo.MemPerNode = ptr.To(int64(GetMemoryFromQuantity(job.Spec.Template.Spec.Resources.Requests.Memory())))
+		if cpu := job.Spec.Template.Spec.Resources.Requests.Cpu().Value(); cpu > 0 {
+			slurmJobIR.JobInfo.CpuPerTask = ptr.To(int32(cpu)) //nolint:gosec // disable G115
+		}
+		if memory := job.Spec.Template.Spec.Resources.Requests.Memory(); memory.Sign() > 0 {
+			slurmJobIR.JobInfo.MemPerNode = ptr.To(GetMemoryFromQuantity(memory))
+		}
 	}
 
 	return slurmJobIR, nil

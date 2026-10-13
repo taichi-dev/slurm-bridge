@@ -77,6 +77,22 @@ func TestJobPodLevelResourcesUseRequests(t *testing.T) {
 	}
 }
 
+func TestJobMissingRequestsLeavesSlurmDefaultsUnset(t *testing.T) {
+	job := newJob("limits-only-job")
+	job.Spec.Template.Spec.Resources.Requests = nil
+	scheme := runtime.NewScheme()
+	utilruntime.Must(kubescheme.AddToScheme(scheme))
+	tt := translator{Reader: fake.NewClientBuilder().WithScheme(scheme).WithObjects(job).Build(), ctx: context.Background()}
+	ir, err := tt.fromJob(newJobPod("limits-only-pod", job.Name), &metav1.PartialObjectMetadata{ObjectMeta: job.ObjectMeta})
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsePodsCpuAndMemory(ir)
+	if ir.JobInfo.CpuPerTask != nil || ir.JobInfo.MemPerNode != nil {
+		t.Fatalf("missing requests must not submit explicit zero reservations: %+v", ir.JobInfo)
+	}
+}
+
 func Test_translator_fromJob(t *testing.T) {
 	type fields struct {
 		Reader client.Reader
