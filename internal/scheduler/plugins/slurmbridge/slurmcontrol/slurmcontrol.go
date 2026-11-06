@@ -181,10 +181,16 @@ func (r *realSlurmControl) submitJob(ctx context.Context, pod *corev1.Pod, slurm
 			Flags: &[]api.V0044JobDescMsgFlags{
 				api.V0044JobDescMsgFlagsEXTERNALJOB,
 			},
-			GroupId:      slurmJobIR.JobInfo.GroupId,
-			Licenses:     slurmJobIR.JobInfo.Licenses,
-			MaximumNodes: slurmJobIR.JobInfo.MaxNodes,
-			McsLabel:     ptr.To(r.mcsLabel),
+			GroupId: slurmJobIR.JobInfo.GroupId,
+			// --no-kill: with Meshy's patched slurmctld (slinky-containers
+			// 25.11.8-1meshy2+), an EXTERNAL_JOB with kill_on_node_fail=0 keeps
+			// its allocation when its node goes DOWN (e.g. a slurmd pod
+			// restart) instead of NODE_FAILing. Settable at submit only;
+			// slurmctld ignores it on update.
+			KillOnNodeFail: ptr.To(false),
+			Licenses:       slurmJobIR.JobInfo.Licenses,
+			MaximumNodes:   slurmJobIR.JobInfo.MaxNodes,
+			McsLabel:       ptr.To(r.mcsLabel),
 			MemoryPerNode: func() *api.V0044Uint64NoValStruct {
 				if slurmJobIR.JobInfo.MemPerNode != nil {
 					return &api.V0044Uint64NoValStruct{
