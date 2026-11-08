@@ -212,7 +212,8 @@ func New(ctx context.Context, obj runtime.Object, handle fwk.Handle) (fwk.Plugin
 		logger.Error(err, "unable to create slurm client")
 		return nil, err
 	}
-	sc := slurmcontrol.NewControl(slurmClient, cfg.MCSLabel, cfg.Partition)
+	sc := slurmcontrol.NewControl(slurmClient, cfg.MCSLabel, cfg.Partition,
+		slurmcontrol.WithKillOnNodeFail(cfg.KillOnNodeFail))
 	plugin := &SlurmBridge{
 		Client:        client,
 		schedulerName: cfg.SchedulerName,

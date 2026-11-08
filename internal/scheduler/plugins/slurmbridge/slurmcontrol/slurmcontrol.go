@@ -44,8 +44,9 @@ type SlurmControlInterface interface {
 // RealPodControl is the default implementation of SlurmControlInterface.
 type realSlurmControl struct {
 	client.Client
-	mcsLabel  string
-	partition string
+	mcsLabel       string
+	partition      string
+	killOnNodeFail *bool
 }
 
 type NodeResources struct {
@@ -182,12 +183,10 @@ func (r *realSlurmControl) submitJob(ctx context.Context, pod *corev1.Pod, slurm
 				api.V0044JobDescMsgFlagsEXTERNALJOB,
 			},
 			GroupId: slurmJobIR.JobInfo.GroupId,
-			// --no-kill: with Meshy's patched slurmctld (slinky-containers
-			// 25.11.8-1meshy2+), an EXTERNAL_JOB with kill_on_node_fail=0 keeps
-			// its allocation when its node goes DOWN (e.g. a slurmd pod
-			// restart) instead of NODE_FAILing. Settable at submit only;
-			// slurmctld ignores it on update.
-			KillOnNodeFail: ptr.To(false),
+			// Unset (nil) is omitted, leaving Slurm's default (kill on node
+			// failure); see config.Config.KillOnNodeFail. Honoured at submit
+			// only: slurmctld ignores it on update.
+			KillOnNodeFail: r.killOnNodeFail,
 			Licenses:       slurmJobIR.JobInfo.Licenses,
 			MaximumNodes:   slurmJobIR.JobInfo.MaxNodes,
 			McsLabel:       ptr.To(r.mcsLabel),
@@ -351,10 +350,25 @@ func (r *realSlurmControl) GetResources(ctx context.Context, pod *corev1.Pod, no
 
 var _ SlurmControlInterface = &realSlurmControl{}
 
-func NewControl(client client.Client, mcsLabel string, partition string) SlurmControlInterface {
-	return &realSlurmControl{
+// Option configures optional realSlurmControl settings.
+type Option func(*realSlurmControl)
+
+// WithKillOnNodeFail sets kill_on_node_fail on submitted external jobs; nil
+// leaves Slurm's default.
+func WithKillOnNodeFail(killOnNodeFail *bool) Option {
+	return func(r *realSlurmControl) {
+		r.killOnNodeFail = killOnNodeFail
+	}
+}
+
+func NewControl(client client.Client, mcsLabel string, partition string, opts ...Option) SlurmControlInterface {
+	r := &realSlurmControl{
 		Client:    client,
 		mcsLabel:  mcsLabel,
 		partition: partition,
 	}
+	for _, opt := range opts {
+		opt(r)
+	}
+	return r
 }

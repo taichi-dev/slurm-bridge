@@ -1076,3 +1076,40 @@ func Test_realSlurmControl_GetResources(t *testing.T) {
 		})
 	}
 }
+
+func Test_realSlurmControl_SubmitJob_KillOnNodeFail(t *testing.T) {
+	tests := []struct {
+		name string
+		opts []Option
+		want *bool
+	}{
+		{name: "unset leaves Slurm's default", opts: nil, want: nil},
+		{name: "explicit nil", opts: []Option{WithKillOnNodeFail(nil)}, want: nil},
+		{name: "false", opts: []Option{WithKillOnNodeFail(ptr.To(false))}, want: ptr.To(false)},
+		{name: "true", opts: []Option{WithKillOnNodeFail(ptr.To(true))}, want: ptr.To(true)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var got *bool
+			f := interceptor.Funcs{
+				Create: func(ctx context.Context, obj object.Object, req any, opts ...client.CreateOption) error {
+					obj.(*slurmtypes.V0044JobInfo).JobId = ptr.To(int32(1))
+					got = req.(api.V0044JobSubmitReq).Job.KillOnNodeFail
+					return nil
+				},
+			}
+			c := fake.NewClientBuilder().WithInterceptorFuncs(f).Build()
+			r := NewControl(c, "kubernetes", "slurm-bridge", tt.opts...)
+			pod := st.MakePod().Name("foo").Namespace("slurm-bridge").Obj()
+			if _, err := r.SubmitJob(context.Background(), pod, &slurmjobir.SlurmJobIR{}); err != nil {
+				t.Fatalf("SubmitJob() error = %v", err)
+			}
+			if (got == nil) != (tt.want == nil) || (got != nil && *got != *tt.want) {
+				t.Errorf("KillOnNodeFail = %v, want %v", ptr.Deref(got, true), ptr.Deref(tt.want, true))
+				if got == nil || tt.want == nil {
+					t.Errorf("KillOnNodeFail set = %v, want set = %v", got != nil, tt.want != nil)
+				}
+			}
+		})
+	}
+}

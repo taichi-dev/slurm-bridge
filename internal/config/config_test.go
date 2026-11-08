@@ -8,6 +8,7 @@ import (
 
 	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/utils/ptr"
 )
 
 func TestUnmarshal(t *testing.T) {
@@ -26,6 +27,24 @@ func TestUnmarshal(t *testing.T) {
 				in: []byte{},
 			},
 			want: &Config{},
+		},
+		{
+			name: "Test killOnNodeFail false",
+			args: args{
+				in: []byte(`killOnNodeFail: false`),
+			},
+			want: &Config{
+				KillOnNodeFail: ptr.To(false),
+			},
+		},
+		{
+			name: "Test killOnNodeFail true",
+			args: args{
+				in: []byte(`killOnNodeFail: true`),
+			},
+			want: &Config{
+				KillOnNodeFail: ptr.To(true),
+			},
 		},
 		{
 			name: "Test schedulerName",
