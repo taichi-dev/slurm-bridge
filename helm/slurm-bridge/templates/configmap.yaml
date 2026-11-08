@@ -25,6 +25,9 @@ data:
     {{- end }}
     mcsLabel: {{ .Values.schedulerConfig.mcsLabel }}
     partition: {{ .Values.schedulerConfig.partition }}
+    {{- if not (kindIs "invalid" .Values.schedulerConfig.killOnNodeFail) }}
+    killOnNodeFail: {{ .Values.schedulerConfig.killOnNodeFail }}
+    {{- end }}
     {{- with .Values.schedulerConfig.gpuTypeMap }}
     gpuTypeMap:
       {{- toYaml . | nindent 6 }}
