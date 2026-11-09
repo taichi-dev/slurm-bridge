@@ -48,6 +48,7 @@ import (
 	"github.com/SlinkyProject/slurm-bridge/internal/runnable/slurmnode"
 	bridgescheduler "github.com/SlinkyProject/slurm-bridge/internal/scheduler"
 	"github.com/SlinkyProject/slurm-bridge/internal/scheduler/plugins/slurmbridge"
+	schedulercontrol "github.com/SlinkyProject/slurm-bridge/internal/scheduler/plugins/slurmbridge/slurmcontrol"
 	"github.com/SlinkyProject/slurm-bridge/internal/utils/slurmjobir"
 )
 
@@ -235,7 +236,8 @@ func main() {
 			}
 		}
 		if enabled["registration"] {
-			registrationController := registration.NewReconciler(mgr.GetClient(), slurmClient, cfg.SchedulerName, draRegistry, workloadAPI, cfg.MCSLabel, cfg.Partition)
+			registrationController := registration.NewReconciler(mgr.GetClient(), slurmClient, cfg.SchedulerName, draRegistry, workloadAPI, cfg.MCSLabel, cfg.Partition,
+				schedulercontrol.WithKillOnNodeFail(cfg.KillOnNodeFail))
 			if err := registrationController.SetupWithManager(mgr); err != nil {
 				setupLog.Error(err, "unable to create controller", "controller", "Registration")
 				os.Exit(1)

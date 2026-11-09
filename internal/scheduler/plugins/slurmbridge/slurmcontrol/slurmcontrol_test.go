@@ -679,8 +679,9 @@ func Test_realSlurmControl_UpdateJobPreservesSubmissionFields(t *testing.T) {
 			}
 			updates := 0
 			r := &realSlurmControl{
-				lastUpdate: lru.New(10),
-				mcsLabel:   "kubernetes",
+				lastUpdate:     lru.New(10),
+				mcsLabel:       "kubernetes",
+				killOnNodeFail: ptr.To(false),
 				Client: fake.NewClientBuilder().WithInterceptorFuncs(interceptor.Funcs{
 					Update: func(ctx context.Context, obj object.Object, req any, opts ...client.UpdateOption) error {
 						updates++
@@ -698,7 +699,7 @@ func Test_realSlurmControl_UpdateJobPreservesSubmissionFields(t *testing.T) {
 						}
 						// Check the wire payload: null or zero still differs from
 						// omitting fields with submission-only semantics in Slurm.
-						for _, key := range []string{"user_id", "group_id", "account", "shared", "mcs_label", "current_working_directory", "flags", "hold"} {
+						for _, key := range []string{"user_id", "group_id", "account", "shared", "mcs_label", "current_working_directory", "flags", "hold", "kill_on_node_fail"} {
 							if value, present := fields[key]; present {
 								t.Errorf("pending-job update sends %s=%s; want omitted", key, value)
 							}

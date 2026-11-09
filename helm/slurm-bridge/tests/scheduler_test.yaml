@@ -75,6 +75,52 @@ tests:
       - matchRegex:
           path: data["config.yaml"]
           pattern: '(?s)deviceProfiles:.*gresName: accelerator.*driver: accelerator.example.com.*name: custom-accelerator'
+  - it: omits killOnNodeFail by default so Slurm's default applies
+    template: configmap.yaml
+    asserts:
+      - notMatchRegex:
+          path: data["config.yaml"]
+          pattern: killOnNodeFail
+  - it: renders killOnNodeFail when set to false
+    template: configmap.yaml
+    set:
+      schedulerConfig:
+        killOnNodeFail: false
+    asserts:
+      - matchRegex:
+          path: data["config.yaml"]
+          # Top-level key of config.yaml: no indentation.
+          pattern: '(?m)^killOnNodeFail: false$'
+  - it: renders killOnNodeFail when set to true
+    template: configmap.yaml
+    set:
+      schedulerConfig:
+        killOnNodeFail: true
+    asserts:
+      - matchRegex:
+          path: data["config.yaml"]
+          # Top-level key of config.yaml: no indentation.
+          pattern: '(?m)^killOnNodeFail: true$'
+  - it: rejects a non-bool killOnNodeFail
+    # The scheduler Deployment includes configmap.yaml for its checksum, so
+    # rendering fails there first.
+    template: scheduler/deployment.yaml
+    set:
+      schedulerConfig:
+        killOnNodeFail: 0
+    asserts:
+      - failedTemplate:
+          errorPattern: 'schedulerConfig\.killOnNodeFail must be true, false or null, got 0 \((int64|float64)\)'
+  - it: rejects a string killOnNodeFail
+    # The scheduler Deployment includes configmap.yaml for its checksum, so
+    # rendering fails there first.
+    template: scheduler/deployment.yaml
+    set:
+      schedulerConfig:
+        killOnNodeFail: "false"
+    asserts:
+      - failedTemplate:
+          errorPattern: 'schedulerConfig\.killOnNodeFail must be true, false or null, got false \(string\)'
   - it: renders a null registry by default so components use built-in profiles
     template: configmap.yaml
     asserts:

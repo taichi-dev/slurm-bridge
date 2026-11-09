@@ -116,3 +116,68 @@ func TestRegisterJob(t *testing.T) {
 		})
 	}
 }
+
+// boolPtrString renders a *bool as nil, true or false for test messages.
+func boolPtrString(v *bool) string {
+	if v == nil {
+		return "nil"
+	}
+	return fmt.Sprint(*v)
+}
+
+func TestRegisterJobKillOnNodeFail(t *testing.T) {
+	pods := func(names ...string) corev1.PodList {
+		var list corev1.PodList
+		for _, name := range names {
+			list.Items = append(list.Items, corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: name}})
+		}
+		return list
+	}
+	single := []slurmjobir.SlurmJobComponent{{Pods: pods("pod-0", "pod-1")}}
+	hetjob := []slurmjobir.SlurmJobComponent{{Pods: pods("pod-0")}, {Pods: pods("pod-1", "pod-2")}}
+	for _, tc := range []struct {
+		name       string
+		opts       []Option
+		components []slurmjobir.SlurmJobComponent
+		want       *bool
+	}{
+		{name: "unset leaves Slurm's default", components: single},
+		{name: "explicit nil leaves Slurm's default", opts: []Option{WithKillOnNodeFail(nil)}, components: single},
+		{name: "single component gets false", opts: []Option{WithKillOnNodeFail(ptr.To(false))}, components: single, want: ptr.To(false)},
+		{name: "single component gets true", opts: []Option{WithKillOnNodeFail(ptr.To(true))}, components: single, want: ptr.To(true)},
+		{name: "every hetjob component gets false", opts: []Option{WithKillOnNodeFail(ptr.To(false))}, components: hetjob, want: ptr.To(false)},
+		{name: "every hetjob component gets true", opts: []Option{WithKillOnNodeFail(ptr.To(true))}, components: hetjob, want: ptr.To(true)},
+		{name: "unset leaves every hetjob component at Slurm's default", components: hetjob},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var got []*bool
+			registrar := NewRegistrar(fake.NewClientBuilder().WithInterceptorFuncs(interceptor.Funcs{
+				Create: func(_ context.Context, obj object.Object, request any, _ ...client.CreateOption) error {
+					req := request.(api.V0044JobSubmitReq)
+					if req.Job != nil {
+						got = append(got, req.Job.KillOnNodeFail)
+					}
+					if req.Jobs != nil {
+						for _, desc := range *req.Jobs {
+							got = append(got, desc.KillOnNodeFail)
+						}
+					}
+					obj.(*api.V0044JobInfo).JobId = ptr.To(int32(42))
+					return nil
+				},
+			}).Build(), "kubernetes", "", tc.opts...)
+			ir := &slurmjobir.SlurmJobIR{Components: tc.components}
+			if _, err := registrar.RegisterJob(t.Context(), ir); err != nil {
+				t.Fatalf("RegisterJob() error = %v", err)
+			}
+			if len(got) != len(tc.components) {
+				t.Fatalf("submitted %d descriptions, want %d", len(got), len(tc.components))
+			}
+			for i, value := range got {
+				if !ptr.Equal(value, tc.want) {
+					t.Errorf("component %d kill_on_node_fail = %s, want %s", i, boolPtrString(value), boolPtrString(tc.want))
+				}
+			}
+		})
+	}
+}

@@ -14,6 +14,7 @@
     - [Topology](#topology)
     - [Hybrid Workload Isolation](#hybrid-workload-isolation)
       - [Production label authorization](#production-label-authorization)
+  - [Node Failures](#node-failures)
 
 <!-- mdformat-toc end -->
 
@@ -226,7 +227,55 @@ to keep Kubernetes workloads that bypass slurm-bridge off hybrid nodes.
 Operational or controller-driven cancellation must also keep a node unavailable
 to native Slurm work until its Kubernetes pods have actually stopped.
 
+## Node Failures
+
+By default, Slurm kills a job when one of its nodes fails or goes `DOWN`. For an
+external job that also ends the bridged pods, even though they run under the
+kubelet and not under `slurmd`, so a `slurmd` restart, pod replacement, or
+missed `SlurmdTimeout` disrupts workloads that are still running.
+
+The scheduler setting `killOnNodeFail` (Helm value
+`schedulerConfig.killOnNodeFail`) is sent as `kill_on_node_fail`
+([`--no-kill`][no-kill]) on every external job the bridge submits, including
+each component of a heterogeneous job. It is applied at submission only; pending
+job updates never send it, so changing the setting affects only jobs submitted
+afterwards; existing allocations keep the value they were submitted with. After
+setting `false`, wait for the jobs submitted before the change to end before
+relying on it, for example before letting slurmd be replaced while external jobs
+run. When unset, Slurm's default applies.
+
+```yaml
+# slurm-bridge values.yaml
+schedulerConfig:
+  killOnNodeFail: false
+```
+
+`false` requires a `slurmctld` that retains an external job's allocation through
+a node `DOWN`. The job then keeps running with its whole allocation while
+`slurmd` is away, and the node returns to service still allocated to it.
+
+A `slurmctld` that retains external jobs may not retain heterogeneous jobs. If
+it does not, a CompositePodGroup with several components, which is submitted as
+a heterogeneous job, is still killed when one of its nodes goes `DOWN`.
+
+If the node never returns, the job keeps its whole allocation, including the
+lost node, until the job ends. For a group of pods, that is when every remaining
+member has exited. Deleting the workload releases the allocation, once every
+member's pod has terminated.
+
+A pod whose host died stays `Terminating`, because only its kubelet can confirm
+that it stopped, so the allocation stays held, on the healthy nodes too. Delete
+the Node object, or add the `node.kubernetes.io/out-of-service` taint to it, so
+Kubernetes finishes the pod and the bridge releases the allocation.
+
+Only set `false` when every `slurmd` the bridge can place on is tied to its
+host, for example hostNetwork or DaemonSet NodeSets, or `slurmd` running as a
+host service. A `slurmd` that registers the same Slurm node name from another
+host would otherwise carry the retained allocation with it, away from the pods
+that use it.
+
 <!-- Links -->
 
 [job-submit]: https://slurm.schedmd.com/job_submit_plugins.html
 [mcs]: https://slurm.schedmd.com/mcs.html
+[no-kill]: https://slurm.schedmd.com/sbatch.html#OPT_no-kill

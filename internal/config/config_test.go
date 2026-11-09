@@ -11,6 +11,7 @@ import (
 
 	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/yaml"
 
 	"github.com/SlinkyProject/slurm-bridge/internal/dra"
@@ -32,6 +33,38 @@ func TestUnmarshal(t *testing.T) {
 				in: []byte{},
 			},
 			want: &Config{},
+		},
+		{
+			name: "Test killOnNodeFail false",
+			args: args{
+				in: []byte(`killOnNodeFail: false`),
+			},
+			want: &Config{
+				KillOnNodeFail: ptr.To(false),
+			},
+		},
+		{
+			name: "Test killOnNodeFail true",
+			args: args{
+				in: []byte(`killOnNodeFail: true`),
+			},
+			want: &Config{
+				KillOnNodeFail: ptr.To(true),
+			},
+		},
+		{
+			name: "Test killOnNodeFail quoted string is rejected",
+			args: args{
+				in: []byte(`killOnNodeFail: "false"`),
+			},
+			wantErr: true,
+		},
+		{
+			name: "Test killOnNodeFail number is rejected",
+			args: args{
+				in: []byte(`killOnNodeFail: 0`),
+			},
+			wantErr: true,
 		},
 		{
 			name: "Test schedulerName",

@@ -35,7 +35,23 @@ type Config struct {
 	ManagedNamespaceSelector *metav1.LabelSelector `json:"managedNamespaceSelector" yaml:"managedNamespaceSelector"`
 	MCSLabel                 string                `json:"mcsLabel" yaml:"mcsLabel"`
 	Partition                string                `json:"partition" yaml:"partition"`
-	DeviceProfiles           []DeviceProfileConfig `json:"deviceProfiles" yaml:"deviceProfiles"`
+	// KillOnNodeFail, when set, is sent as kill_on_node_fail on every external
+	// job the bridge submits, including each hetjob component. Unset keeps
+	// Slurm's default: the job is killed when one of its nodes fails or goes
+	// DOWN.
+	//
+	// false requires a slurmctld that retains an external job's allocation
+	// through a node DOWN. The job then keeps running with its whole
+	// allocation when slurmd goes away, whether its pod is replaced or it stops
+	// responding, so the bridged pods are not disrupted. Such a slurmctld may
+	// not retain heterogeneous jobs, so a hetjob can still be killed.
+	//
+	// Only set false when every slurmd the bridge can place on is host-bound
+	// (for example hostNetwork or DaemonSet NodeSets, or slurmd running as a
+	// host service): a slurmd that comes back on another host would otherwise
+	// carry the allocation with it.
+	KillOnNodeFail *bool                 `json:"killOnNodeFail,omitempty" yaml:"killOnNodeFail,omitempty"`
+	DeviceProfiles []DeviceProfileConfig `json:"deviceProfiles" yaml:"deviceProfiles"`
 	// ClientQPS and ClientBurst configure the scheduler plugin's own
 	// Kubernetes client (distinct from kube-scheduler's internal client).
 	// Zero means unset and defaults to DefaultClientQPS/DefaultClientBurst.

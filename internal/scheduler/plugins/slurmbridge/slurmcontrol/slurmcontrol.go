@@ -59,7 +59,10 @@ type realSlurmControl struct {
 	*slurmjob.PodIndex
 	mcsLabel  string
 	partition string
-	nodes     client.InformerCache
+	// killOnNodeFail is sent as kill_on_node_fail on every submitted job
+	// component; nil leaves Slurm's default.
+	killOnNodeFail *bool
+	nodes          client.InformerCache
 	// lastUpdate holds the last job description sent per pending job ID, so an
 	// unchanged UpdateJob skips its REST round trip. Size-capped so jobs that are
 	// never looked up again can't grow it without bound.
@@ -193,8 +196,24 @@ type JobRegistrar interface {
 // ErrRegistrationNotSubmitted marks failures before a submission reaches the client.
 var ErrRegistrationNotSubmitted = errors.New("registration was not submitted")
 
-func NewRegistrar(c client.Client, mcsLabel, partition string) JobRegistrar {
-	return &realSlurmControl{Client: c, mcsLabel: mcsLabel, partition: partition}
+func NewRegistrar(c client.Client, mcsLabel, partition string, opts ...Option) JobRegistrar {
+	r := &realSlurmControl{Client: c, mcsLabel: mcsLabel, partition: partition}
+	for _, opt := range opts {
+		opt(r)
+	}
+	return r
+}
+
+// Option configures optional job submission settings of the JobRegistrar
+// returned by NewRegistrar, which is the only path that submits jobs.
+type Option func(*realSlurmControl)
+
+// WithKillOnNodeFail sets kill_on_node_fail on every submitted external job
+// component; nil leaves Slurm's default. See config.Config.KillOnNodeFail.
+func WithKillOnNodeFail(killOnNodeFail *bool) Option {
+	return func(r *realSlurmControl) {
+		r.killOnNodeFail = killOnNodeFail
+	}
 }
 
 // UpdateJob updates an external job
@@ -331,6 +350,11 @@ func (r *realSlurmControl) buildJobSubmission(root metav1.PartialObjectMetadata,
 	desc.McsLabel = ptr.To(r.mcsLabel)
 	desc.CurrentWorkingDirectory = ptr.To("/tmp")
 	desc.Flags = &[]api.V0044JobDescMsgFlags{api.V0044JobDescMsgFlagsEXTERNALJOB}
+	// slurmctld honors kill_on_node_fail at submission only and ignores it
+	// on update. Unset (nil) is omitted, leaving Slurm's default.
+	if r.killOnNodeFail != nil {
+		desc.KillOnNodeFail = ptr.To(*r.killOnNodeFail)
+	}
 	// Register every component held. ReleaseJob applies priority separately
 	// after all components' eligibility updates succeed.
 	desc.Hold = ptr.To(true)

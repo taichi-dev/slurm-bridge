@@ -63,9 +63,9 @@ type Reconciler struct {
 	enqueue        func(Request) // Installed by the source before controller workers start.
 }
 
-func NewReconciler(kube client.Client, slurm slurmclient.Client, schedulerName string, registry *dra.Registry, workloadAPI *slurmjobir.WorkloadAPI, mcsLabel, partition string) *Reconciler {
+func NewReconciler(kube client.Client, slurm slurmclient.Client, schedulerName string, registry *dra.Registry, workloadAPI *slurmjobir.WorkloadAPI, mcsLabel, partition string, opts ...schedulercontrol.Option) *Reconciler {
 	return &Reconciler{Client: kube, apiReader: kube, slurmControl: slurmcontrol.NewControl(slurm), slurmClient: slurm, informer: slurm.GetInformer(api.ObjectTypeV0044JobInfo), schedulerName: schedulerName,
-		submit: schedulercontrol.NewRegistrar(slurm, mcsLabel, partition), registry: registry, workloadAPI: workloadAPI, recent: cache.NewExpiring()}
+		submit: schedulercontrol.NewRegistrar(slurm, mcsLabel, partition, opts...), registry: registry, workloadAPI: workloadAPI, recent: cache.NewExpiring()}
 }
 
 // SetupWithManager serializes allocation registration, publication, and cleanup.

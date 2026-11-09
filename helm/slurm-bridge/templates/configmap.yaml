@@ -25,6 +25,13 @@ data:
     {{- end }}
     mcsLabel: {{ .Values.schedulerConfig.mcsLabel }}
     partition: {{ .Values.schedulerConfig.partition }}
+    {{- $killOnNodeFail := .Values.schedulerConfig.killOnNodeFail }}
+    {{- if and (not (kindIs "invalid" $killOnNodeFail)) (not (kindIs "bool" $killOnNodeFail)) }}
+    {{- fail (printf "schedulerConfig.killOnNodeFail must be true, false or null, got %v (%s)" $killOnNodeFail (kindOf $killOnNodeFail)) }}
+    {{- end }}
+    {{- if kindIs "bool" $killOnNodeFail }}
+    killOnNodeFail: {{ $killOnNodeFail }}
+    {{- end }}
     {{- if .Values.schedulerConfig.clientQPS }}
     clientQPS: {{ .Values.schedulerConfig.clientQPS }}
     {{- end }}
