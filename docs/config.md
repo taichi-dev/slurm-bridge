@@ -14,6 +14,7 @@
     - [Topology](#topology)
     - [Hybrid Workload Isolation](#hybrid-workload-isolation)
       - [Production label authorization](#production-label-authorization)
+  - [Lost Hosts](#lost-hosts)
 
 <!-- mdformat-toc end -->
 
@@ -225,6 +226,44 @@ use the `slinky.slurm.net/managed-node` `NoExecute` taint and admission policy
 to keep Kubernetes workloads that bypass slurm-bridge off hybrid nodes.
 Operational or controller-driven cancellation must also keep a node unavailable
 to native Slurm work until its Kubernetes pods have actually stopped.
+
+## Lost Hosts
+
+Slurm can keep a job's allocation while one of its nodes is `DOWN`, for example
+for an external job submitted with `kill_on_node_fail=0` on a `slurmctld` that
+keeps such jobs' allocations. A pod whose host died then stays `Terminating`,
+because only its kubelet can confirm that it stopped, and the bridge would hold
+the allocation until the pod is finished. The bridge stops waiting for such a
+pod when all of these hold:
+
+- the pod was deleted, for example by Kubernetes once its toleration for
+  `node.kubernetes.io/unreachable` expired (300 seconds by default);
+- its node's kubelet has stopped reporting (`Ready` is `Unknown`), and the node
+  carries the `node.kubernetes.io/unreachable` `NoExecute` taint;
+- Slurm reports its node `NOT_RESPONDING`.
+
+The bridge checks these each time it resyncs its allocations, every 30 seconds,
+and cancels the job once every other member has exited. It needs the `node`
+controller: without it, the bridge waits for such pods as it does for any other.
+Before cancelling, it drains the pod's Slurm node with the reason
+`slurm-bridge: waiting for pods on a lost host to stop`, so no new work starts
+on resources the pod's containers may still use if the host returns. The `node`
+controller lifts that drain once no deleted pod scheduled by the bridge is bound
+to the node any more, or keeps the node drained if the Kubernetes node is
+cordoned. A drain set by someone else is left as it is. The bridge records a
+`SlurmAllocationReleasedNodeLost` event on the pod, and the job ends `CANCELLED`
+rather than `NODE_FAIL`. Requiring both the kubelet and `slurmd` to be silent
+keeps a kubelet failure, or a node cut off only from the Kubernetes API server,
+from releasing resources that the pod may still use. Slurm marks a node
+`NOT_RESPONDING` only when its pings fail, and it does not ping nodes when
+`SlurmdTimeout` is 0, so the bridge then never stops waiting for the pod. The
+same holds for nodes the bridge registers in Slurm as external nodes, which run
+no `slurmd`.
+
+The pod itself stays `Terminating` until Kubernetes finishes it. For a host that
+will not return, delete the Node object or add the
+`node.kubernetes.io/out-of-service` taint to it. If the host returns, its
+kubelet stops the pod, and the drain is lifted once it has.
 
 <!-- Links -->
 

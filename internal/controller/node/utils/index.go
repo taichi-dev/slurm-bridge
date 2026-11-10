@@ -63,10 +63,26 @@ func IndexResourceSliceByPool(obj client.Object) []string {
 	return []string{dra.ResourcePoolIDFromSlice(resourceSlice).String()}
 }
 
+// IndexFieldPodNodeName is the field index name under which Pods are indexed by
+// the node they are bound to.
+const IndexFieldPodNodeName = "slurmBridge.podNodeName"
+
+// IndexPodByNodeName is the IndexerFunc for IndexFieldPodNodeName.
+func IndexPodByNodeName(obj client.Object) []string {
+	pod, ok := obj.(*corev1.Pod)
+	if !ok || pod.Spec.NodeName == "" {
+		return nil
+	}
+	return []string{pod.Spec.NodeName}
+}
+
 // SetupFieldIndexers registers the field indexes used by the node controller and the
-// slurmnode runnable to resolve a Kubernetes Node from a Slurm node name, and to resolve
-// the ResourceSlices relevant to a given Node.
+// slurmnode runnable to resolve a Kubernetes Node from a Slurm node name, to resolve
+// the ResourceSlices relevant to a given Node, and to find the Pods bound to it.
 func SetupFieldIndexers(mgr ctrl.Manager) error {
+	if err := mgr.GetFieldIndexer().IndexField(context.Background(), &corev1.Pod{}, IndexFieldPodNodeName, IndexPodByNodeName); err != nil {
+		return err
+	}
 	if err := mgr.GetFieldIndexer().IndexField(context.Background(), &corev1.Node{}, IndexFieldSlurmNodeName, IndexNodeBySlurmName); err != nil {
 		return err
 	}

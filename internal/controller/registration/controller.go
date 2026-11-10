@@ -61,6 +61,11 @@ type Reconciler struct {
 	eventRecorder  record.EventRecorder
 	eventHistory   *cache.Expiring
 	enqueue        func(Request) // Installed by the source before controller workers start.
+
+	// ReleaseStranded lets an allocation be released without waiting for
+	// stranded members (see strandedMembers). It requires the node
+	// controller, which lifts the drain hold set on their nodes.
+	ReleaseStranded bool
 }
 
 func NewReconciler(kube client.Client, slurm slurmclient.Client, schedulerName string, registry *dra.Registry, workloadAPI *slurmjobir.WorkloadAPI, mcsLabel, partition string) *Reconciler {
@@ -71,6 +76,7 @@ func NewReconciler(kube client.Client, slurm slurmclient.Client, schedulerName s
 // SetupWithManager serializes allocation registration, publication, and cleanup.
 // +kubebuilder:rbac:groups="",resources=pods,verbs=delete;get;list;patch;watch
 // +kubebuilder:rbac:groups="",resources=pods/finalizers,verbs=patch;update
+// +kubebuilder:rbac:groups="",resources=nodes,verbs=get;list;watch
 // +kubebuilder:rbac:groups=resource.k8s.io,resources=resourceclaims,verbs=delete;get;list;watch
 // +kubebuilder:rbac:groups=batch,resources=jobs,verbs=get;list;watch
 // +kubebuilder:rbac:groups=apps,resources=replicasets;deployments;statefulsets;daemonsets,verbs=get;list;watch

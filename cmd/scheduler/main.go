@@ -236,6 +236,9 @@ func main() {
 		}
 		if enabled["registration"] {
 			registrationController := registration.NewReconciler(mgr.GetClient(), slurmClient, cfg.SchedulerName, draRegistry, workloadAPI, cfg.MCSLabel, cfg.Partition)
+			// Only the node controller lifts the drain hold set when releasing
+			// an allocation held by pods on a lost host.
+			registrationController.ReleaseStranded = enabled["node"]
 			if err := registrationController.SetupWithManager(mgr); err != nil {
 				setupLog.Error(err, "unable to create controller", "controller", "Registration")
 				os.Exit(1)

@@ -13,6 +13,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/klog/v2"
+	podv1 "k8s.io/kubernetes/pkg/api/v1/pod"
 	"k8s.io/kubernetes/pkg/util/taints"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -26,6 +27,10 @@ import (
 )
 
 const eventReasonOverlappingDRADeviceProfiles = "OverlappingDRADeviceProfiles"
+
+// lostHostRecheck paces rechecks of a Slurm node held for a lost host while
+// pods bound to it are still stopping.
+const lostHostRecheck = 30 * time.Second
 
 func (r *NodeReconciler) Sync(ctx context.Context, req reconcile.Request) error {
 	var errs []error
@@ -169,6 +174,32 @@ func (r *NodeReconciler) syncState(ctx context.Context, req reconcile.Request, a
 		return err
 	}
 
+	held, err := r.slurmControl.IsNodeHeldForLostHost(ctx, node)
+	if err != nil {
+		return err
+	}
+	if held {
+		// The registration controller released an allocation without waiting
+		// for a pod on this node's lost host. Keep native Slurm work off the
+		// node until Kubernetes confirms the node's deleted pods stopped.
+		stopping, err := r.hasStoppingPods(ctx, node)
+		if err != nil {
+			return err
+		}
+		if stopping {
+			logger.V(1).Info("Keeping Slurm node drained, pods on a lost host are still stopping", "node", klog.KObj(node))
+			durationStore.Push(req.String(), lostHostRecheck)
+			return nil
+		}
+		drainReason := ""
+		if node.Spec.Unschedulable {
+			drainReason = fmt.Sprintf("Corresponding Kubernetes node (%s) is unschedulable", klog.KObj(node))
+		} else if !allowUndrain {
+			return nil
+		}
+		return r.slurmControl.ReleaseLostHostHold(ctx, node, drainReason)
+	}
+
 	// `kubectl [cordon|drain] $NODE` will make nodes unschedulable.
 	if node.Spec.Unschedulable {
 		reason := fmt.Sprintf("Corresponding Kubernetes node (%s) is unschedulable", klog.KObj(node))
@@ -188,6 +219,22 @@ func (r *NodeReconciler) syncState(ctx context.Context, req reconcile.Request, a
 	}
 
 	return nil
+}
+
+// hasStoppingPods reports whether a deleted bridged pod that has not finished
+// is still bound to the node.
+func (r *NodeReconciler) hasStoppingPods(ctx context.Context, node *corev1.Node) (bool, error) {
+	pods := &corev1.PodList{}
+	if err := r.List(ctx, pods, client.MatchingFields{nodeutils.IndexFieldPodNodeName: node.Name}); err != nil {
+		return false, err
+	}
+	for i := range pods.Items {
+		pod := &pods.Items[i]
+		if pod.Spec.SchedulerName == r.SchedulerName && pod.DeletionTimestamp != nil && !podv1.IsPodTerminal(pod) {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // syncNodeRegistration will handle registering and unregistering Kubernetes nodes in Slurm.

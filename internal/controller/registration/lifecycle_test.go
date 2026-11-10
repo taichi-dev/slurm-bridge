@@ -47,6 +47,8 @@ type lifecycleFixture struct {
 	cancellations   []int32
 	cancelErr       error
 	acknowledgeOnly bool
+	holds           []heldNode
+	holdErr         error
 }
 
 func newLifecycleFixture(t *testing.T) *lifecycleFixture {

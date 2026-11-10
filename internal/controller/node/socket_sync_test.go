@@ -53,6 +53,9 @@ func (c *drainingSocketControl) MakeNodeDrain(context.Context, *corev1.Node, str
 	c.drains++
 	return c.drainErr
 }
+func (c *drainingSocketControl) IsNodeHeldForLostHost(context.Context, *corev1.Node) (bool, error) {
+	return false, nil
+}
 func (c *drainingSocketControl) IsNodeDrained(context.Context, *corev1.Node) (bool, error) {
 	return c.drained, c.drainedErr
 }

@@ -39,6 +39,13 @@ type SlurmControlInterface interface {
 	MakeNodeUndrain(ctx context.Context, node *corev1.Node, reason string) error
 	// IsNodeDrain checks if the slurm node has the DRAIN state.
 	IsNodeDrain(ctx context.Context, node *corev1.Node) (bool, error)
+	// IsNodeHeldForLostHost reports whether the Slurm node is drained with
+	// wellknown.SlurmReasonLostHost.
+	IsNodeHeldForLostHost(ctx context.Context, node *corev1.Node) (bool, error)
+	// ReleaseLostHostHold lifts wellknown.SlurmReasonLostHost from the Slurm
+	// node: it undrains the node, or, when drainReason is set, keeps it drained
+	// with that reason instead. A node drained for another reason is left as is.
+	ReleaseLostHostHold(ctx context.Context, node *corev1.Node, drainReason string) error
 	// IsNodeDrained checks if the slurm node is DRAINED and eligible for removal.
 	IsNodeDrained(ctx context.Context, node *corev1.Node) (bool, error)
 	// IsNodeExternal checks if the slurm node is an external node
@@ -196,6 +203,58 @@ func shouldSkipUndrain(ctx context.Context, slurmNode *api.V0044Node) bool {
 		return true
 	}
 	return false
+}
+
+func isHeldForLostHost(slurmNode *api.V0044Node) bool {
+	state := slurmutils.GetStateAsSet(slurmNode.State)
+	return state.Has(api.V0044NodeStateDRAIN) && !state.Has(api.V0044NodeStateUNDRAIN) &&
+		ptr.Deref(slurmNode.Reason, "") == wellknown.SlurmReasonLostHost
+}
+
+// IsNodeHeldForLostHost implements SlurmControlInterface.
+func (r *realSlurmControl) IsNodeHeldForLostHost(ctx context.Context, node *corev1.Node) (bool, error) {
+	slurmNode := &api.V0044Node{}
+	if err := r.Get(ctx, slurmobject.ObjectKey(nodeutils.GetSlurmNodeName(node)), slurmNode); err != nil {
+		if errors.Is(err, slurmerrors.ErrNotFound) {
+			return false, nil
+		}
+		return false, err
+	}
+	return isHeldForLostHost(slurmNode), nil
+}
+
+// ReleaseLostHostHold implements SlurmControlInterface.
+func (r *realSlurmControl) ReleaseLostHostHold(ctx context.Context, node *corev1.Node, drainReason string) error {
+	logger := log.FromContext(ctx)
+
+	// A direct read confirms the hold is still ours: an admin may have
+	// re-drained the node since the last cache refresh.
+	slurmNode := &api.V0044Node{}
+	if err := r.Get(ctx, slurmobject.ObjectKey(nodeutils.GetSlurmNodeName(node)), slurmNode, &slurmclient.GetOptions{SkipCache: true}); err != nil {
+		if errors.Is(err, slurmerrors.ErrNotFound) {
+			return nil
+		}
+		return err
+	}
+	if !isHeldForLostHost(slurmNode) {
+		return nil
+	}
+
+	req := api.V0044UpdateNodeMsg{
+		State:  ptr.To([]api.V0044UpdateNodeMsgState{api.V0044UpdateNodeMsgStateUNDRAIN}),
+		Reason: ptr.To(nodeReasonPrefix + " pods on a lost host stopped"),
+	}
+	if drainReason != "" {
+		req = api.V0044UpdateNodeMsg{
+			State:  ptr.To([]api.V0044UpdateNodeMsgState{api.V0044UpdateNodeMsgStateDRAIN}),
+			Reason: ptr.To(nodeReasonPrefix + " " + drainReason),
+		}
+	}
+	logger.Info("Release Slurm node held for a lost host", "node", klog.KObj(node), "drainReason", drainReason)
+	if err := r.Update(ctx, slurmNode, req); err != nil && !errors.Is(err, slurmerrors.ErrNotFound) {
+		return err
+	}
+	return nil
 }
 
 // IsNodeDrain implements SlurmControlInterface.

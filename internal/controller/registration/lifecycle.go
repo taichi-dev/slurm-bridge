@@ -13,6 +13,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -114,9 +115,11 @@ func (r *Reconciler) componentMembers(ctx context.Context, reader client.Reader,
 	return result, nil
 }
 
-func needsAllocation(pods []corev1.Pod) bool {
+// needsAllocation reports whether any member still needs the allocation. A
+// stranded member (see strandedMembers) does not.
+func needsAllocation(pods []corev1.Pod, stranded map[types.UID]bool) bool {
 	for i := range pods {
-		if !podReadyForCleanup(&pods[i]) {
+		if !podReadyForCleanup(&pods[i]) && !stranded[pods[i].UID] {
 			return true
 		}
 	}
@@ -126,9 +129,10 @@ func needsAllocation(pods []corev1.Pod) bool {
 // releasable reports whether an allocation can be released. LWS recreates the
 // whole group when one of its pods is lost (RecreateGroupOnPodRestart, the only
 // policy admitted), so a lost LWS member releases the allocation without
-// waiting for the surviving members to terminate.
-func releasable(pods []corev1.Pod) bool {
-	if !needsAllocation(pods) {
+// waiting for the surviving members to terminate. A stranded member does not
+// count as lost here: only a finished one does.
+func releasable(pods []corev1.Pod, stranded map[types.UID]bool) bool {
+	if !needsAllocation(pods, stranded) {
 		return true
 	}
 	return slices.ContainsFunc(pods, func(p corev1.Pod) bool {
@@ -180,9 +184,15 @@ func (r *Reconciler) releaseComponent(ctx context.Context, cached slurmjob.Regis
 		return false, fmt.Errorf("ownership changed for job %d", cached.JobId)
 	}
 	members, err := r.componentMembers(ctx, r.liveMembers(), cached)
-	if err != nil || !releasable(members) {
+	if err != nil {
 		return false, err
 	}
+	lost := make(map[string]bool)
+	stranded, err := r.strandedMembers(ctx, members, true, lost)
+	if err != nil || !releasable(members, stranded) {
+		return false, err
+	}
+	notWaitedFor := strandedPods(members, stranded)
 	if live.HetJobId != 0 && (live.Pending || live.HetJobOffset == 0) {
 		// Pending components and component zero cannot be canceled independently.
 		// Check every live component and its current members, including uncached
@@ -201,10 +211,18 @@ func (r *Reconciler) releaseComponent(ctx context.Context, cached slurmjob.Regis
 				return false, err
 			}
 			pods, err := r.componentMembers(ctx, r.liveMembers(), sibling)
-			if err != nil || !releasable(pods) {
+			if err != nil {
 				return false, err
 			}
+			siblingStranded, err := r.strandedMembers(ctx, pods, true, lost)
+			if err != nil || !releasable(pods, siblingStranded) {
+				return false, err
+			}
+			notWaitedFor = append(notWaitedFor, strandedPods(pods, siblingStranded)...)
 		}
+	}
+	if err := r.holdLostHosts(ctx, notWaitedFor); err != nil {
+		return false, err
 	}
 	if live.HetJobId != 0 && !live.Pending {
 		err = r.slurmControl.TerminateHetJobComponent(ctx, live.HetJobId, live.HetJobOffset)
@@ -214,6 +232,7 @@ func (r *Reconciler) releaseComponent(ctx context.Context, cached slurmjob.Regis
 	if err != nil {
 		return false, err
 	}
+	r.recordStranded(notWaitedFor)
 	// A cancellation acknowledgement is not proof that nodes have been released.
 	raw, err = r.liveJob(ctx, cached.JobId)
 	if err != nil || raw == nil {
@@ -251,6 +270,7 @@ func (r *Reconciler) reconcileLifecycle(ctx context.Context, key Request, pods [
 	released := make(map[int32]bool)
 	associatedJobs := make(map[string][]int32)
 	waiting := false
+	candidateNodes := make(map[string]bool)
 	for _, job := range jobs {
 		current, err := r.componentMembers(ctx, r.cachedMembers(), job)
 		if err != nil {
@@ -264,14 +284,21 @@ func (r *Reconciler) reconcileLifecycle(ctx context.Context, key Request, pods [
 			released[job.JobId] = true
 			continue
 		}
-		if !releasable(current) && !job.Finished {
+		// Live reads in releaseComponent confirm or reject cached candidates.
+		// A candidate that is not confirmed yet is rechecked when the job source
+		// requeues the allocation (see jobSource).
+		candidates, err := r.strandedMembers(ctx, current, false, candidateNodes)
+		if err != nil {
+			return false, err
+		}
+		if !releasable(current, candidates) && !job.Finished {
 			continue
 		}
 		released[job.JobId], err = r.releaseComponent(ctx, job)
 		if err != nil {
 			return false, err
 		}
-		if !released[job.JobId] && releasable(current) {
+		if !released[job.JobId] && releasable(current, nil) {
 			waiting = true
 		}
 	}

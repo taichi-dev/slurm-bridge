@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/utils/ptr"
@@ -28,6 +29,15 @@ type SlurmControlInterface interface {
 	// TerminateHetJobComponent cancels the component at hetJobOffset.
 	// Offset zero cancels the whole heterogeneous allocation.
 	TerminateHetJobComponent(ctx context.Context, hetJobId, hetJobOffset int32) error
+	// IsNodeNotResponding reports whether Slurm currently reports the node as
+	// not responding, read live. A node unknown to Slurm is reported as
+	// responding.
+	IsNodeNotResponding(ctx context.Context, nodeName string) (bool, error)
+	// HoldNode drains the Slurm node with wellknown.SlurmReasonLostHost, so no
+	// new work starts on it while a pod on its lost host may still run. A
+	// drain set by someone other than slurm-bridge is left as it is, and a
+	// node unknown to Slurm is skipped.
+	HoldNode(ctx context.Context, nodeName string) error
 }
 
 // RealSlurmControl is the default implementation of SlurmControlInterface.
@@ -72,6 +82,54 @@ func (r *realSlurmControl) IsJobRunning(ctx context.Context, pod *corev1.Pod) (b
 	}
 	return false, nil
 }
+
+// IsNodeNotResponding implements SlurmControlInterface.
+func (r *realSlurmControl) IsNodeNotResponding(ctx context.Context, nodeName string) (bool, error) {
+	node := &api.V0044Node{}
+	key := object.ObjectKey(nodeName)
+	if err := r.Get(ctx, key, node, &client.GetOptions{SkipCache: true}); err != nil {
+		if errors.Is(err, slurmerrors.ErrNotFound) {
+			return false, nil
+		}
+		return false, err
+	}
+	if node.GetKey() != key {
+		return false, fmt.Errorf("slurm returned node %s when requesting node %s", node.GetKey(), key)
+	}
+	return slurmutils.GetStateAsSet(node.State).Has(api.V0044NodeStateNOTRESPONDING), nil
+}
+
+// HoldNode implements SlurmControlInterface.
+func (r *realSlurmControl) HoldNode(ctx context.Context, nodeName string) error {
+	node := &api.V0044Node{}
+	key := object.ObjectKey(nodeName)
+	if err := r.Get(ctx, key, node, &client.GetOptions{SkipCache: true}); err != nil {
+		if errors.Is(err, slurmerrors.ErrNotFound) {
+			return nil
+		}
+		return err
+	}
+	if node.GetKey() != key {
+		return fmt.Errorf("slurm returned node %s when requesting node %s", node.GetKey(), key)
+	}
+	states := slurmutils.GetStateAsSet(node.State)
+	reason := ptr.Deref(node.Reason, "")
+	if states.Has(api.V0044NodeStateDRAIN) && !states.Has(api.V0044NodeStateUNDRAIN) &&
+		(reason == wellknown.SlurmReasonLostHost || (reason != "" && !strings.Contains(reason, slurmBridgeReasonPrefix))) {
+		return nil
+	}
+	req := api.V0044UpdateNodeMsg{
+		State:  ptr.To([]api.V0044UpdateNodeMsgState{api.V0044UpdateNodeMsgStateDRAIN}),
+		Reason: ptr.To(wellknown.SlurmReasonLostHost),
+	}
+	if err := r.Update(ctx, node, req); err != nil && !errors.Is(err, slurmerrors.ErrNotFound) {
+		return err
+	}
+	return nil
+}
+
+// slurmBridgeReasonPrefix starts every node reason the bridge sets.
+const slurmBridgeReasonPrefix = "slurm-bridge:"
 
 // TerminateJob implements SlurmControlInterface.
 func (r *realSlurmControl) TerminateJob(ctx context.Context, jobId int32) error {
